@@ -49,7 +49,9 @@ class LitClassifier(pl.LightningModule):
             self.threshold = 0
 
     def forward(self, x):
-        return self.output_head(self.model(x))
+        x = self.model(x)
+        x = x.flatten(start_dim=2).transpose(1, 2) # B L C
+        return self.output_head(x)
     
     def augment(self, img):
 
