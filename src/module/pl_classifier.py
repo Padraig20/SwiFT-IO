@@ -45,9 +45,6 @@ class LitClassifier(pl.LightningModule):
 
         self.metric = Metrics()
 
-        if self.hparams.adjust_thresh:
-            self.threshold = 0
-
     def forward(self, x):
         x = self.model(x)
         return self.output_head(x)
@@ -188,7 +185,8 @@ class LitClassifier(pl.LightningModule):
             self.log(f"{mode}_AUROC", roc_auc, sync_dist=True)
 
         # regression target is normalized
-        elif self.hparams.downstream_task_type == 'regression':          
+        elif self.hparams.downstream_task_type == 'regression':
+            subj_avg_logits = subj_avg_logits.squeeze()
             mse = F.mse_loss(subj_avg_logits, subj_targets)
             mae = F.l1_loss(subj_avg_logits, subj_targets)
             
@@ -222,7 +220,7 @@ class LitClassifier(pl.LightningModule):
         """
         subj, logits, target = self._compute_logits(batch) #(b, num_classes)
         output = [(logit.cpu().detach(), targets.cpu().item()) for logit, targets in zip(logits, target)]
-        return (subj, output.detach().cpu())
+        return (subj, output)
 
     def validation_epoch_end(self, outputs):
         """
@@ -317,7 +315,7 @@ class LitClassifier(pl.LightningModule):
         out_test_list = []
         for subj, out in outputs:
             subj_test += subj
-            out_test_list.append(out.detach())
+            out_test_list.append(out)
 
         subj_test = np.array(subj_test)
         total_out_test = [item for sublist in out_test_list for item in sublist]
@@ -432,9 +430,9 @@ class LitClassifier(pl.LightningModule):
         group.add_argument("--milestones", nargs="+", default=[100, 150], type=int, help="lr scheduler")
         
         # pretraining-related
-        #group.add_argument("--use_contrastive", action='store_true', help="whether to use contrastive learning (specify --contrastive_type argument as well)")
-        #group.add_argument("--contrastive_type", default=0, type=int, help="combination of contrastive losses to use [1: Use the Instance contrastive loss function, 2: Use the local-local temporal contrastive loss function, 3: Use the sum of both loss functions]")
-        #group.add_argument("--pretraining", action='store_true', help="whether to use pretraining")
+        group.add_argument("--use_contrastive", action='store_true', help="whether to use contrastive learning (specify --contrastive_type argument as well)")
+        group.add_argument("--contrastive_type", default=0, type=int, help="combination of contrastive losses to use [1: Use the Instance contrastive loss function, 2: Use the local-local temporal contrastive loss function, 3: Use the sum of both loss functions]")
+        group.add_argument("--pretraining", action='store_true', help="whether to use pretraining")
         group.add_argument("--augment_during_training", action='store_true', help="whether to augment input images during training")
         group.add_argument("--augment_only_affine", action='store_true', help="whether to only apply affine augmentation")
         group.add_argument("--augment_only_intensity", action='store_true', help="whether to only apply intensity augmentation")
