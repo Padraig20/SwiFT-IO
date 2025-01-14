@@ -51,25 +51,6 @@ class TrainableQueryProvider(nn.Module, QueryProvider):
     def forward(self, x=None):
         return rearrange(self._query, "... -> 1 ...")
 
-    @property
-    def vocab_size(self):
-        return self.txt_embedding.num_embeddings
-
-    @property
-    def max_seq_len(self):
-        return self._max_seq_len
-
-    def forward(self, x, abs_pos=None):
-        if self._abs_pos_emb:
-            if abs_pos is None:
-                abs_pos = positions(*x.shape, device=x.device)
-            elif x.shape[1] < abs_pos.shape[1]:
-                # use right-most position codes
-                abs_pos = abs_pos[:, -x.shape[1] :]
-            return self.txt_embedding(x) + self.pos_embedding(abs_pos)
-        else:
-            return self.txt_embedding(x)
-
 class TiedTokenOutputAdapter(OutputAdapter):
     def __init__(self, vocab_size: int, emb_bias: bool = True):
         super().__init__()

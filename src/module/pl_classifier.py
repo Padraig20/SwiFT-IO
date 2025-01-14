@@ -8,7 +8,8 @@ import pickle
 
 from torchmetrics.classification import BinaryAccuracy, BinaryAUROC
 from torchmetrics import  PearsonCorrCoef # Accuracy,
-from sklearn.metrics import balanced_accuracy_score, roc_curve
+from sklearn.metrics import balanced_accuracy_score, accuracy_score, roc_auc_score
+from sklearn.preprocessing import label_binarize
 import monai.transforms as monai_t
 
 from argparse import ArgumentParser, ArgumentDefaultsHelpFormatter
@@ -41,7 +42,7 @@ class LitClassifier(pl.LightningModule):
         print(self.hparams.model)
         self.model = load_model(self.hparams.model, self.hparams)
         
-        self.output_head = "Not Implemented" #TBD
+        self.output_head = load_model("single_target_decoder", self.hparams)
 
         self.metric = Metrics()
 
@@ -100,14 +101,15 @@ class LitClassifier(pl.LightningModule):
         feature = self.model(fmri)
 
         # Classification task
-        if self.hparams.downstream_task == 'sex' or self.hparams.downstream_task_type == 'classification' or self.hparams.scalability_check:
-            logits = self.output_head(feature).squeeze() #self.clf(feature).squeeze()
-            target = target_value.float().squeeze()
+        if self.hparams.downstream_task_type == 'classification':
+            logits = self.output_head(feature).squeeze() # (b,num_classes)
+            target = target_value.float().squeeze() # (b,num_classes)
         # Regression task
-        elif self.hparams.downstream_task == 'age' or self.hparams.downstream_task == 'int_total' or self.hparams.downstream_task == 'int_fluid' or self.hparams.downstream_task_type == 'regression':
-            # target_mean, target_std = self.determine_target_mean_std()
-            logits = self.output_head(feature) # (batch,1) or # tuple((batch,1), (batch,1))
-            unnormalized_target = target_value.float() # (batch,1)
+        elif self.hparams.downstream_task_type == 'regression':
+            
+            logits = self.output_head(feature) # (b,1)
+            unnormalized_target = target_value.float() # (b,1)
+            
             if self.hparams.label_scaling_method == 'standardization': # default
                 target = (unnormalized_target - self.scaler.mean_[0]) / (self.scaler.scale_[0])
             elif self.hparams.label_scaling_method == 'minmax':
@@ -123,86 +125,33 @@ class LitClassifier(pl.LightningModule):
             assert cond1, "Wrong combination of options"
             loss = 0
 
-            if self.hparams.use_contrastive:
-                assert self.hparams.contrastive_type != "none", "Contrastive type not specified"
+        subj, logits, target = self._compute_logits(batch, augment_during_training = self.hparams.augment_during_training)
 
-                # B, C, H, W, D, T = image shape
-                y, diff_y = fmri
-
-                batch_size = y.shape[0]
-                if (len(subj) != len(tuple(subj))) and mode == 'train':
-                    print('Some sub-sequences in a batch came from the same subject!')
-                criterion = NTXentLoss(device='cuda', batch_size=batch_size,
-                                        temperature=self.hparams.temperature,
-                                        use_cosine_similarity=True).cuda()
-                criterion_ll = NTXentLoss(device='cuda', batch_size=2,
-                                            temperature=self.hparams.temperature,
-                                            use_cosine_similarity=True).cuda()
-                
-                # type 1: IC
-                # type 2: LL
-                # type 3: IC + LL
-                if self.hparams.contrastive_type in [1, 3]:
-                    out_global_1 = self.output_head(self.model(self.augment(y)),"g")
-                    out_global_2 = self.output_head(self.model(self.augment(diff_y)),"g")
-                    ic_loss = criterion(out_global_1, out_global_2)
-                    loss += ic_loss
-
-                if self.hparams.contrastive_type in [2, 3]:
-                    out_local_1 = []
-                    out_local_2 = []
-                    out_local_swin1 = self.model(self.augment(y))
-                    out_local_swin2 = self.model(self.augment(y))
-                    out_local_1.append(self.output_head(out_local_swin1, "l"))
-                    out_local_2.append(self.output_head(out_local_swin2, "l"))
-
-                    out_local_swin1 = self.model(self.augment(diff_y))
-                    out_local_swin2 = self.model(self.augment(diff_y))
-                    out_local_1.append(self.output_head(out_local_swin1, "l"))
-                    out_local_2.append(self.output_head(out_local_swin2, "l"))
-
-                    ll_loss = 0
-                    # loop over batch size
-                    for i in range(out_local_1[0].shape[0]):
-                        # out_local shape should be: BS, n_local_clips, D
-                        ll_loss += criterion_ll(torch.stack(out_local_1, dim=1)[i],
-                                                torch.stack(out_local_2, dim=1)[i])
-                    loss += ll_loss
-
-                result_dict = {
-                    f"{mode}_loss": loss,
-                }        
-        else:
-            subj, logits, target = self._compute_logits(batch, augment_during_training = self.hparams.augment_during_training)
-
-            if self.hparams.downstream_task == 'sex' or self.hparams.downstream_task_type == 'classification' or self.hparams.scalability_check:
-                loss = F.binary_cross_entropy_with_logits(logits, target) # target is float
-                acc = self.metric.get_accuracy_binary(logits, target.float().squeeze())
-                result_dict = {
+        if self.hparams.downstream_task_type == 'classification':
+            loss = F.cross_entropy(logits, target) # target is float
+            acc = self.metric.get_accuracy(logits, target.float().squeeze())
+            result_dict = {
                 f"{mode}_loss": loss,
                 f"{mode}_acc": acc,
-                }
+            }
 
-            elif self.hparams.downstream_task == 'age' or self.hparams.downstream_task == 'int_total' or self.hparams.downstream_task == 'int_fluid' or self.hparams.downstream_task_type == 'regression':
-                loss = F.mse_loss(logits.squeeze(), target.squeeze())
-                l1 = F.l1_loss(logits.squeeze(), target.squeeze())
-                result_dict = {
-                    f"{mode}_loss": loss,
-                    f"{mode}_mse": loss,
-                    f"{mode}_l1_loss": l1
-                }
-        self.log_dict(result_dict, prog_bar=True, sync_dist=False, add_dataloader_idx=False, on_step=True, on_epoch=True, batch_size=self.hparams.batch_size) # batch_size = batch_size
+        elif self.hparams.downstream_task_type == 'regression':
+            loss = F.mse_loss(logits.squeeze(), target.squeeze())
+            l1 = F.l1_loss(logits.squeeze(), target.squeeze())
+            result_dict = {
+                f"{mode}_loss": loss,
+                f"{mode}_mse": loss,
+                f"{mode}_l1_loss": l1
+            }
+        self.log_dict(result_dict, prog_bar=True, sync_dist=False, add_dataloader_idx=False, on_step=True, on_epoch=True, batch_size=self.hparams.batch_size)
         return loss
 
     def _evaluate_metrics(self, subj_array, total_out, mode):
-        # print('total_out.device',total_out.device)
-        # (total iteration/world_size) numbers of samples are passed into _evaluate_metrics.
         subjects = np.unique(subj_array)
         
         subj_avg_logits = []
         subj_targets = []
         for subj in subjects:
-            #print('total_out.shape:',total_out.shape) # total_out.shape: torch.Size([16, 2])
             subj_logits = total_out[subj_array == subj,0] 
             subj_avg_logits.append(torch.mean(subj_logits).item())
             subj_targets.append(total_out[subj_array == subj,1][0].item())
@@ -210,46 +159,30 @@ class LitClassifier(pl.LightningModule):
         subj_targets = torch.tensor(subj_targets, device = total_out.device) 
         
     
-        if self.hparams.downstream_task == 'sex' or self.hparams.downstream_task_type == 'classification' or self.hparams.scalability_check:
-            if self.hparams.adjust_thresh:
-                # move threshold to maximize balanced accuracy
-                best_bal_acc = 0
-                best_thresh = 0
-                for thresh in np.arange(-5, 5, 0.01):
-                    bal_acc = balanced_accuracy_score(subj_targets.cpu(), (subj_avg_logits>=thresh).int().cpu())
-                    if bal_acc > best_bal_acc:
-                        best_bal_acc = bal_acc
-                        best_thresh = thresh
-                self.log(f"{mode}_best_thresh", best_thresh, sync_dist=True)
-                self.log(f"{mode}_best_balacc", best_bal_acc, sync_dist=True)
-                fpr, tpr, thresholds = roc_curve(subj_targets.cpu(), subj_avg_logits.cpu())
-                idx = np.argmax(tpr - fpr)
-                youden_thresh = thresholds[idx]
-                acc_func = BinaryAccuracy().to(total_out.device)
-                self.log(f"{mode}_youden_thresh", youden_thresh, sync_dist=True)
-                self.log(f"{mode}_youden_balacc", balanced_accuracy_score(subj_targets.cpu(), (subj_avg_logits>=youden_thresh).int().cpu()), sync_dist=True)
+        if self.hparams.downstream_task_type == 'classification':
+            num_classes = subj_avg_logits.shape[1]
+            
+            probabilities = F.softmax(subj_avg_logits, dim=0) # (b,num_classes)
+            predictions = probabilities.argmax(dim=1) # (b)
+            
+            predictions_np = predictions.cpu().numpy()
+            targets_np = subj_targets.cpu().numpy()
 
-                if mode == 'valid':
-                    self.threshold = youden_thresh
-                elif mode == 'test':
-                    bal_acc = balanced_accuracy_score(subj_targets.cpu(), (subj_avg_logits>=self.threshold).int().cpu())
-                    self.log(f"{mode}_balacc_from_valid_thresh", bal_acc, sync_dist=True)
-            else:
-                acc_func = BinaryAccuracy().to(total_out.device)
-                
-            auroc_func = BinaryAUROC().to(total_out.device)
-            acc = acc_func((subj_avg_logits >= 0).int(), subj_targets)
-            #print((subj_avg_logits>=0).int().cpu())
-            #print(subj_targets.cpu())
-            bal_acc_sk = balanced_accuracy_score(subj_targets.cpu(), (subj_avg_logits>=0).int().cpu())
-            auroc = auroc_func(torch.sigmoid(subj_avg_logits), subj_targets)
+            accuracy = accuracy_score(targets_np, predictions_np)
+            balanced_accuracy = balanced_accuracy_score(targets_np, predictions_np)
 
-            self.log(f"{mode}_acc", acc, sync_dist=True)
-            self.log(f"{mode}_balacc", bal_acc_sk, sync_dist=True)
-            self.log(f"{mode}_AUROC", auroc, sync_dist=True)
+            if num_classes == 2:
+                roc_auc_score = roc_auc_score(targets_np, predictions_np)
+            else: 
+                targets_one_hot = label_binarize(targets_np, classes=np.arange(num_classes))
+                roc_auc_score = roc_auc_score(targets_one_hot, probabilities.cpu().detach().numpy(), multi_class='ovr')
+
+            self.log(f"{mode}_acc", accuracy, sync_dist=True)
+            self.log(f"{mode}_balacc", balanced_accuracy, sync_dist=True)
+            self.log(f"{mode}_AUROC", roc_auc_score, sync_dist=True)
 
         # regression target is normalized
-        elif self.hparams.downstream_task == 'age' or self.hparams.downstream_task == 'int_total' or self.hparams.downstream_task == 'int_fluid' or self.hparams.downstream_task_type == 'regression':          
+        elif self.hparams.downstream_task_type == 'regression':          
             mse = F.mse_loss(subj_avg_logits, subj_targets)
             mae = F.l1_loss(subj_avg_logits, subj_targets)
             
@@ -274,18 +207,12 @@ class LitClassifier(pl.LightningModule):
         return loss
 
     def validation_step(self, batch, batch_idx, dataloader_idx):
-        if self.hparams.pretraining:
-            if dataloader_idx == 0:
-                self._calculate_loss(batch, mode="valid")
-            else:
-                self._calculate_loss(batch, mode="test")
+        subj, logits, target = self._compute_logits(batch) #(b, num_classes)
+        if self.hparams.downstream_task_type == 'classification':
+            output = torch.stack([logits[1].squeeze(), target], dim=1) # logits[1] : regression head
         else:
-            subj, logits, target = self._compute_logits(batch)
-            if self.hparams.downstream_task_type == 'multi_task':
-                output = torch.stack([logits[1].squeeze(), target], dim=1) # logits[1] : regression head
-            else:
-                output = torch.stack([logits.squeeze(), target.squeeze()], dim=1)
-            return (subj, output.detach().cpu())
+            output = torch.stack([logits.squeeze(), target.squeeze()], dim=1)
+        return (subj, output.detach().cpu())
 
     def validation_epoch_end(self, outputs):
         # called at the end of the validation epoch
@@ -465,7 +392,7 @@ class LitClassifier(pl.LightningModule):
         parser = ArgumentParser(parents=[parent_parser], add_help=False, formatter_class=ArgumentDefaultsHelpFormatter)
         group = parser.add_argument_group("Default classifier")
         # training related
-        group.add_argument("--grad_clip", action='store_true', help="whether to use gradient clipping")
+        #group.add_argument("--grad_clip", action='store_true', help="whether to use gradient clipping")
         group.add_argument("--optimizer", type=str, default="AdamW", help="which optimizer to use [AdamW, SGD]")
         group.add_argument("--use_scheduler", action='store_true', help="whether to use scheduler")
         group.add_argument("--weight_decay", type=float, default=0.01, help="weight decay for optimizer")
@@ -502,5 +429,8 @@ class LitClassifier(pl.LightningModule):
         # others
         group.add_argument("--scalability_check", action='store_true', help="whether to check scalability")
         group.add_argument("--process_code", default=None, help="Slurm code/PBS code. Use this argument if you want to save process codes to your log")
+        
+        # decoder related
+        group.add_argument("--num_classes", type=int, default=2, help="Number of distinct target classes")
         
         return parser

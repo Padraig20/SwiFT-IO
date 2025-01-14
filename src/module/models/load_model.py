@@ -7,10 +7,18 @@ def load_model(model_name, hparams=None):
         to_float = False
     elif hparams.precision == 32:
         to_float = True
+        
+    h, w, d, t = hparams.img_size
+    hp, wp, dp, tp = hparams.patch_size
+        
+    h = h // hp // hp // hp
+    w = w // wp // hp // hp
+    d = d // dp // dp // dp
+    t = t // tp // tp // tp
+    embed_dim = hparams.embed_dim * 8
     
-    #h, w, d, t = hparams.img_size
-    #dims = h//48 * w//48 * d//48 * hparams.embed_dim*8 # TODO: verify this
-    
+    dims = h * w * d * t
+        
     if model_name == "swin4d_ver7":
         net = SwinTransformer4D(
             img_size=hparams.img_size,
@@ -29,22 +37,23 @@ def load_model(model_name, hparams=None):
             attn_drop_rate=hparams.attn_drop_rate
         )
     elif model_name == "single_target_decoder": # TODO add hparams
+        num_classes = 1 if hparams.downstream_task_type == 'regression' else hparams.num_classes
         net = SingleTargetDecoder(
-            num_latents=hparams.num_latents,
-            num_latent_channels=hparams.num_latent_channels,
-            activation_checkpointing=hparams.activation_checkpointing,
-            activation_offloading=hparams.activation_offloading,
-            num_cross_attention_heads=hparams.num_cross_attention_heads,
-            num_cross_attention_qk_channels=hparams.num_cross_attention_qk_channels,
-            num_cross_attention_v_channels=hparams.num_cross_attention_v_channels,
-            cross_attention_widening_factor=hparams.cross_attention_widening_factor,
-            cross_attention_residual=hparams.cross_attention_residual,
-            dropout=hparams.dropout,
-            init_scale=hparams.init_scale,
-            freeze=hparams.freeze,
-            num_output_queries=hparams.num_output_queries,
-            num_output_query_channels=hparams.num_output_query_channels,
-            num_classes=hparams.num_classes
+            num_latents=embed_dim,
+            num_latent_channels=dims, # TODO: verify this
+            #activation_checkpointing=hparams.activation_checkpointing,
+            #activation_offloading=hparams.activation_offloading,
+            #num_cross_attention_heads=hparams.num_cross_attention_heads,
+            #num_cross_attention_qk_channels=hparams.num_cross_attention_qk_channels,
+            #num_cross_attention_v_channels=hparams.num_cross_attention_v_channels,
+            #cross_attention_widening_factor=hparams.cross_attention_widening_factor,
+            #cross_attention_residual=hparams.cross_attention_residual,
+            #dropout=hparams.dropout,
+            #init_scale=hparams.init_scale,
+            #freeze=hparams.freeze,
+            #num_output_queries=hparams.num_output_queries,
+            #num_output_query_channels=hparams.num_output_query_channels,
+            num_classes=num_classes
         )
     else:
         raise NameError(f"{model_name} is a wrong model name")

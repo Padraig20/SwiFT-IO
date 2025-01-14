@@ -2,10 +2,10 @@ from typing import Optional
 
 import torch.nn as nn
 
-from .backend.adapter import ClassificationOutputAdapter, TrainableQueryProvider
-from .backend.modules import PerceiverDecoder
+from module.models.PerceiverIO.backend.adapter import ClassificationOutputAdapter, TrainableQueryProvider
+from module.models.PerceiverIO.backend.modules import PerceiverDecoder
 
-class SingleTargetDecoder(nn.Sequential):
+class SingleTargetDecoder(nn.Module):
     def __init__(self,
                  # PerceiverIO specific
                  num_latents: int,
@@ -20,12 +20,12 @@ class SingleTargetDecoder(nn.Sequential):
                  cross_attention_residual: bool = True,
                  dropout: float = 0.0,
                  init_scale: float = 0.02,
-                 freeze: bool = False,
                  # Classification specific
                  num_output_queries: int = 1,
                  num_output_query_channels: int = 256,
                  num_classes: int = 100 # set to 1 for regression
                  ):
+        super().__init__()
         
         output_query_provider = TrainableQueryProvider(
             num_queries=1,
@@ -36,7 +36,7 @@ class SingleTargetDecoder(nn.Sequential):
             num_classes=num_classes,
             num_output_query_channels=num_output_query_channels,
         )
-        decoder = PerceiverDecoder(
+        self.decoder = PerceiverDecoder(
             output_adapter=output_adapter,
             output_query_provider=output_query_provider,
             num_latent_channels=num_latent_channels,
@@ -47,10 +47,8 @@ class SingleTargetDecoder(nn.Sequential):
             num_cross_attention_v_channels=num_cross_attention_v_channels,
             cross_attention_widening_factor=cross_attention_widening_factor,
             cross_attention_residual=cross_attention_residual,
-            dropout=dropout,
-            freeze=freeze
+            dropout=dropout
         )
-        super().__init__(decoder)
 
     def forward(self, x):
         return self.decoder(x) # x expected to be a tensor of shape (batch_size, num_latents, num_latent_channels)
