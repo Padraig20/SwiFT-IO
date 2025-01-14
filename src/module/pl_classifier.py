@@ -112,6 +112,10 @@ class LitClassifier(pl.LightningModule):
             logits = self.output_head(feature) # (b,1)
             unnormalized_target = target_value.float() # (b,1)
             
+            if self.hparams.decoder == 'series_decoder': # (batch, T, E) -> (batch, T*E)
+                logits = logits.view(logits.size(0), -1)
+                unnormalized_target = unnormalized_target.view(unnormalized_target.size(0), -1)
+            
             if self.hparams.label_scaling_method == 'standardization': # default
                 target = (unnormalized_target - self.scaler.mean_[0]) / (self.scaler.scale_[0])
             elif self.hparams.label_scaling_method == 'minmax':
@@ -199,6 +203,34 @@ class LitClassifier(pl.LightningModule):
                 adjusted_mae = F.l1_loss(subj_avg_logits * (self.scaler.data_max_[0] - self.scaler.data_min_[0]) + self.scaler.data_min_[0], subj_targets * (self.scaler.data_max_[0] - self.scaler.data_min_[0]) + self.scaler.data_min_[0])
             pearson = PearsonCorrCoef()
             pearson_coef = pearson(subj_avg_logits, subj_targets)
+            
+            # evaluate multiple targets separately
+            t = subj_avg_logits.shape[1] // self.hparams.num_classes
+            
+            subj_avg_logits = subj_avg_logits.view(-1, t ,self.hparams.num_classes)
+            subj_targets = subj_targets.view(-1, t ,self.hparams.num_classes)
+            
+            for i in range(self.hparams.num_classes):
+                logits_group = subj_avg_logits[..., i]  # Shape: [batch_size, temporal_size]
+                target_group = subj_targets[..., i]
+                    
+                mse_group = F.mse_loss(logits_group, target_group)  # target is float
+                mae_group = F.l1_loss(logits_group, target_group)
+                
+                pearson_coef_group = pearson(subj_avg_logits, subj_targets)
+                
+                if self.hparams.label_scaling_method == 'standardization': # default
+                    adjusted_mse_group = F.mse_loss(logits_group * self.scaler.scale_[0] + self.scaler.mean_[0], target_group * self.scaler.scale_[0] + self.scaler.mean_[0])
+                    adjusted_mae_group = F.l1_loss(logits_group * self.scaler.scale_[0] + self.scaler.mean_[0], target_group * self.scaler.scale_[0] + self.scaler.mean_[0])
+                elif self.hparams.label_scaling_method == 'minmax':
+                    adjusted_mse_group = F.mse_loss(logits_group * (self.scaler.data_max_[0] - self.scaler.data_min_[0]) + self.scaler.data_min_[0], target_group * (self.scaler.data_max_[0] - self.scaler.data_min_[0]) + self.scaler.data_min_[0])
+                    adjusted_mae_group = F.l1_loss(logits_group * (self.scaler.data_max_[0] - self.scaler.data_min_[0]) + self.scaler.data_min_[0], target_group * (self.scaler.data_max_[0] - self.scaler.data_min_[0]) + self.scaler.data_min_[0])
+
+                self.log(f"{mode}_corrcoef_{i}", pearson_coef_group, sync_dist=True)
+                self.log(f"{mode}_mse_{i}", mse_group, sync_dist=True)
+                self.log(f"{mode}_mae_{i}", mae_group, sync_dist=True)
+                self.log(f"{mode}_adjusted_mse_{i}", adjusted_mse_group, sync_dist=True)
+                self.log(f"{mode}_adjusted_mae_{i}", adjusted_mae_group, sync_dist=True)
             
             self.log(f"{mode}_corrcoef", pearson_coef, sync_dist=True)
             self.log(f"{mode}_mse", mse, sync_dist=True)

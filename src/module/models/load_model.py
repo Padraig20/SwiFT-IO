@@ -1,5 +1,6 @@
 from .encoder.swin4d_transformer_ver7 import SwinTransformer4D
 from .decoder.single_target_decoder import SingleTargetDecoder
+from .decoder.series_decoder import SeriesDecoder
 
 def load_model(model_name, hparams=None):
 
@@ -8,13 +9,13 @@ def load_model(model_name, hparams=None):
     elif hparams.precision == 32:
         to_float = True
         
-    h, w, d, t = hparams.img_size
+    h, w, d, t_orig = hparams.img_size
     hp, wp, dp, tp = hparams.patch_size
     
     h = h // (hp*8) if hp != 1 else h
     w = w // (wp*8) if wp != 1 else w
     d = d // (dp*8) if dp != 1 else d
-    t = t // (tp*8) if tp != 1 else t
+    t = t_orig // (tp*8) if tp != 1 else t_orig
 
     embed_dim = hparams.embed_dim * 8
     
@@ -37,7 +38,7 @@ def load_model(model_name, hparams=None):
             drop_path_rate=hparams.attn_drop_rate,
             attn_drop_rate=hparams.attn_drop_rate
         )
-    elif model_name == "single_target_decoder": # TODO add hparams
+    elif model_name == "single_target_decoder": # TODO add hparams?
         num_classes = 1 if hparams.downstream_task_type == 'regression' else hparams.num_classes
         net = SingleTargetDecoder(
             num_latents=embed_dim,
@@ -55,6 +56,24 @@ def load_model(model_name, hparams=None):
             #num_output_queries=hparams.num_output_queries,
             #num_output_query_channels=hparams.num_output_query_channels,
             num_classes=num_classes
+        )
+    elif model_name == "series_decoder":
+        net = SeriesDecoder(
+            num_latents=embed_dim,
+            num_latent_channels=dims, # TODO: verify this
+            #activation_checkpointing=hparams.activation_checkpointing,
+            #activation_offloading=hparams.activation_offloading,
+            #num_cross_attention_heads=hparams.num_cross_attention_heads,
+            #num_cross_attention_qk_channels=hparams.num_cross_attention_qk_channels,
+            #num_cross_attention_v_channels=hparams.num_cross_attention_v_channels,
+            #cross_attention_widening_factor=hparams.cross_attention_widening_factor,
+            #cross_attention_residual=hparams.cross_attention_residual,
+            #dropout=hparams.dropout,
+            #init_scale=hparams.init_scale,
+            #freeze=hparams.freeze,
+            num_output_queries=t_orig,
+            #num_output_query_channels=hparams.num_output_query_channels,
+            num_classes=hparams.num_classes
         )
     else:
         raise NameError(f"{model_name} is a wrong model name")
