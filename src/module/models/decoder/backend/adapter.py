@@ -2,8 +2,6 @@ import torch
 from einops import rearrange
 from torch import nn as nn
 
-from .position import positions
-
 class OutputAdapter(nn.Module):
     """Transforms generic decoder cross-attention output to task-specific output."""
 
@@ -50,17 +48,3 @@ class TrainableQueryProvider(nn.Module, QueryProvider):
 
     def forward(self, x=None):
         return rearrange(self._query, "... -> 1 ...")
-
-class TiedTokenOutputAdapter(OutputAdapter):
-    def __init__(self, vocab_size: int, emb_bias: bool = True):
-        super().__init__()
-        self._emb_bias = emb_bias
-        if emb_bias:
-            self.bias = nn.Parameter(torch.zeros(vocab_size))
-
-    def forward(self, x, txt_embedding: nn.Embedding):
-        result = torch.matmul(x, txt_embedding.weight.T)
-        if self._emb_bias:
-            return result + self.bias
-        else:
-            return result

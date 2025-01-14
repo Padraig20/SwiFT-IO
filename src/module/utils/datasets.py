@@ -6,7 +6,6 @@ from torch.utils.data import Dataset
 # import augmentations
 import numpy as np
 import torchio as tio
-import nibabel as nb
 import random
 
 class BaseDataset(Dataset):
@@ -83,7 +82,13 @@ class Dummy(BaseDataset):
         _, subj, _, sequence_length = self.data[idx]
         y = torch.randn(( 1, 96, 96, 96, sequence_length),dtype=torch.float16) #self.y[seq_idx]
         sex = torch.randint(0,2,(1,)).float()
-        target = torch.randint(0,2,(1,)).float()
+        
+        # classification
+        num_classes = 2
+        target = torch.randint(0,num_classes,(1,)).float()
+        
+        # regression
+        #target = torch.rand(1)
         
         return {
                 "fmri_sequence": y,

@@ -1,13 +1,9 @@
 import os
 import pytorch_lightning as pl
 import numpy as np
-import pandas as pd
-from torch.utils.data import DataLoader, Subset
+from torch.utils.data import DataLoader
 from .datasets import Dummy
 from argparse import ArgumentParser, ArgumentDefaultsHelpFormatter
-
-from sklearn.model_selection import StratifiedShuffleSplit
-from sklearn.preprocessing import LabelEncoder
 
 class fMRIDataModule(pl.LightningDataModule):
     def __init__(self, **kwargs):

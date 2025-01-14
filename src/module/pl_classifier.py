@@ -6,8 +6,7 @@ import numpy as np
 import os
 import pickle
 
-from torchmetrics.classification import BinaryAccuracy, BinaryAUROC
-from torchmetrics import  PearsonCorrCoef # Accuracy,
+from torchmetrics import PearsonCorrCoef # Accuracy,
 from sklearn.metrics import balanced_accuracy_score, accuracy_score, roc_auc_score
 from sklearn.preprocessing import label_binarize
 import monai.transforms as monai_t
@@ -16,7 +15,6 @@ from argparse import ArgumentParser, ArgumentDefaultsHelpFormatter
 
 from .models.load_model import load_model
 from .utils.metrics import Metrics
-from .utils.losses import NTXentLoss
 from .utils.lr_scheduler import CosineAnnealingWarmUpRestarts
 
 from einops import rearrange
@@ -24,6 +22,7 @@ from einops import rearrange
 from sklearn.preprocessing import StandardScaler, MinMaxScaler
 
 class LitClassifier(pl.LightningModule):
+    
     def __init__(self,data_module, **kwargs):
         super().__init__()
         self.save_hyperparameters(kwargs) # save hyperparameters except data_module (data_module cannot be pickled as a checkpoint)
@@ -42,7 +41,7 @@ class LitClassifier(pl.LightningModule):
         print(self.hparams.model)
         self.model = load_model(self.hparams.model, self.hparams)
         
-        self.output_head = load_model("single_target_decoder", self.hparams)
+        self.output_head = load_model(self.hparams.decoder, self.hparams)
 
         self.metric = Metrics()
 
@@ -51,11 +50,13 @@ class LitClassifier(pl.LightningModule):
 
     def forward(self, x):
         x = self.model(x)
-        x = x.flatten(start_dim=2).transpose(1, 2) # B L C
         return self.output_head(x)
     
     def augment(self, img):
-
+        """
+        Applies data augmentation to a 6D image tensor. The augmentations include random affine transformations, Gaussian noise, and Gaussian smoothing. 
+        Augmentation can be controlled to target intensity or affine transformations only. Ensures consistent augmentation across time steps.
+        """
         B, C, H, W, D, T = img.shape
 
         device = img.device
@@ -93,6 +94,10 @@ class LitClassifier(pl.LightningModule):
         return img
     
     def _compute_logits(self, batch, augment_during_training=None):
+        """
+        Processes a batch of data to compute logits for either classification or regression tasks. 
+        Applies optional augmentation during training and handles label scaling for regression tasks.
+        """
         fmri, subj, target_value, tr, sex = batch.values()
        
         if augment_during_training:
@@ -118,17 +123,14 @@ class LitClassifier(pl.LightningModule):
         return subj, logits, target
     
     def _calculate_loss(self, batch, mode):
-        if self.hparams.pretraining:
-            fmri, subj, target_value, tr, sex = batch.values()
-            
-            cond1 = (self.hparams.in_chans == 1 and not self.hparams.with_voxel_norm)
-            assert cond1, "Wrong combination of options"
-            loss = 0
-
+        """
+        Calculates the loss and performance metrics for classification or regression tasks. 
+        Logs the results for monitoring during training or evaluation.
+        """
         subj, logits, target = self._compute_logits(batch, augment_during_training = self.hparams.augment_during_training)
 
         if self.hparams.downstream_task_type == 'classification':
-            loss = F.cross_entropy(logits, target) # target is float
+            loss = F.cross_entropy(logits, target.long()) # target is float
             acc = self.metric.get_accuracy(logits, target.float().squeeze())
             result_dict = {
                 f"{mode}_loss": loss,
@@ -147,22 +149,26 @@ class LitClassifier(pl.LightningModule):
         return loss
 
     def _evaluate_metrics(self, subj_array, total_out, mode):
+        """
+        Evaluates classification or regression metrics for aggregated subject-level predictions. 
+        Logs accuracy, balanced accuracy, and AUROC for classification tasks, and MSE, MAE, and correlation coefficients for regression tasks, including metrics on the original scale.
+        """
         subjects = np.unique(subj_array)
         
         subj_avg_logits = []
         subj_targets = []
         for subj in subjects:
-            subj_logits = total_out[subj_array == subj,0] 
-            subj_avg_logits.append(torch.mean(subj_logits).item())
-            subj_targets.append(total_out[subj_array == subj,1][0].item())
-        subj_avg_logits = torch.tensor(subj_avg_logits, device = total_out.device) 
-        subj_targets = torch.tensor(subj_targets, device = total_out.device) 
-        
+            subj_logits = [total_out[i][0] for i in range(len(subj_array)) if subj_array[i] == subj]
+            subj_avg_logits.append(torch.mean(torch.stack(subj_logits), dim=0))
+            subj_targets.append([total_out[i][1] for i in range(len(subj_array)) if subj_array[i] == subj][0])
+    
+        subj_avg_logits = torch.stack(subj_avg_logits)
+        subj_targets = torch.tensor(subj_targets)
     
         if self.hparams.downstream_task_type == 'classification':
             num_classes = subj_avg_logits.shape[1]
             
-            probabilities = F.softmax(subj_avg_logits, dim=0) # (b,num_classes)
+            probabilities = F.softmax(subj_avg_logits.to(dtype=torch.float32), dim=1) # (b,num_classes), require 32 bit precision
             predictions = probabilities.argmax(dim=1) # (b)
             
             predictions_np = predictions.cpu().numpy()
@@ -172,14 +178,14 @@ class LitClassifier(pl.LightningModule):
             balanced_accuracy = balanced_accuracy_score(targets_np, predictions_np)
 
             if num_classes == 2:
-                roc_auc_score = roc_auc_score(targets_np, predictions_np)
+                roc_auc = roc_auc_score(targets_np, predictions_np)
             else: 
                 targets_one_hot = label_binarize(targets_np, classes=np.arange(num_classes))
-                roc_auc_score = roc_auc_score(targets_one_hot, probabilities.cpu().detach().numpy(), multi_class='ovr')
+                roc_auc = roc_auc_score(targets_one_hot, probabilities.cpu().detach().numpy(), multi_class='ovr')
 
             self.log(f"{mode}_acc", accuracy, sync_dist=True)
             self.log(f"{mode}_balacc", balanced_accuracy, sync_dist=True)
-            self.log(f"{mode}_AUROC", roc_auc_score, sync_dist=True)
+            self.log(f"{mode}_AUROC", roc_auc, sync_dist=True)
 
         # regression target is normalized
         elif self.hparams.downstream_task_type == 'regression':          
@@ -193,56 +199,60 @@ class LitClassifier(pl.LightningModule):
             elif self.hparams.label_scaling_method == 'minmax':
                 adjusted_mse = F.mse_loss(subj_avg_logits * (self.scaler.data_max_[0] - self.scaler.data_min_[0]) + self.scaler.data_min_[0], subj_targets * (self.scaler.data_max_[0] - self.scaler.data_min_[0]) + self.scaler.data_min_[0])
                 adjusted_mae = F.l1_loss(subj_avg_logits * (self.scaler.data_max_[0] - self.scaler.data_min_[0]) + self.scaler.data_min_[0], subj_targets * (self.scaler.data_max_[0] - self.scaler.data_min_[0]) + self.scaler.data_min_[0])
-            pearson = PearsonCorrCoef().to(total_out.device)
-            prearson_coef = pearson(subj_avg_logits, subj_targets)
+            pearson = PearsonCorrCoef()
+            pearson_coef = pearson(subj_avg_logits, subj_targets)
             
-            self.log(f"{mode}_corrcoef", prearson_coef, sync_dist=True)
+            self.log(f"{mode}_corrcoef", pearson_coef, sync_dist=True)
             self.log(f"{mode}_mse", mse, sync_dist=True)
             self.log(f"{mode}_mae", mae, sync_dist=True)
             self.log(f"{mode}_adjusted_mse", adjusted_mse, sync_dist=True) 
             self.log(f"{mode}_adjusted_mae", adjusted_mae, sync_dist=True) 
 
     def training_step(self, batch, batch_idx):
+        """
+        Performs a single training step by calculating and returning the loss for the given batch.
+        """
         loss = self._calculate_loss(batch, mode="train")
         return loss
 
     def validation_step(self, batch, batch_idx, dataloader_idx):
+        """
+        Processes a single validation batch to compute logits and targets, 
+        returning subject IDs and corresponding predictions for evaluation.
+        """
         subj, logits, target = self._compute_logits(batch) #(b, num_classes)
-        if self.hparams.downstream_task_type == 'classification':
-            output = torch.stack([logits[1].squeeze(), target], dim=1) # logits[1] : regression head
-        else:
-            output = torch.stack([logits.squeeze(), target.squeeze()], dim=1)
+        output = [(logit.cpu().detach(), targets.cpu().item()) for logit, targets in zip(logits, target)]
         return (subj, output.detach().cpu())
 
     def validation_epoch_end(self, outputs):
-        # called at the end of the validation epoch
-        # outputs is an array with what you returned in validation_step for each batch
-        # outputs = [{'loss': batch_0_loss}, {'loss': batch_1_loss}, ..., {'loss': batch_n_loss}] 
-        if not self.hparams.pretraining:
-            outputs_valid = outputs[0]
-            outputs_test = outputs[1]
-            subj_valid = []
-            subj_test = []
-            out_valid_list = []
-            out_test_list = []
-            for subj, out in outputs_valid:
-                subj_valid += subj
-                out_valid_list.append(out)
-            for subj, out in outputs_test:
-                subj_test += subj
-                out_test_list.append(out)
-            subj_valid = np.array(subj_valid)
-            subj_test = np.array(subj_test)
-            total_out_valid = torch.cat(out_valid_list, dim=0)
-            total_out_test = torch.cat(out_test_list, dim=0)
+        """
+        Aggregates and processes validation and test outputs at the end of an epoch. 
+        Evaluates metrics for both datasets and optionally saves model predictions for future analysis.
+        """
+        outputs_valid = outputs[0]
+        outputs_test = outputs[1]
+        subj_valid = []
+        subj_test = []
+        out_valid_list = []
+        out_test_list = []
+        for subj, out in outputs_valid:
+            subj_valid += subj
+            out_valid_list.append(out)
+        for subj, out in outputs_test:
+            subj_test += subj
+            out_test_list.append(out)
+        subj_valid = np.array(subj_valid)
+        subj_test = np.array(subj_test)
+        total_out_valid = [item for sublist in out_valid_list for item in sublist]
+        total_out_test = [item for sublist in out_test_list for item in sublist]
 
-            # save model predictions if it is needed for future analysis
-            # self._save_predictions(subj_valid,total_out_valid,mode="valid")
-            # self._save_predictions(subj_test,total_out_test, mode="test") 
+        # save model predictions if it is needed for future analysis
+        # self._save_predictions(subj_valid,total_out_valid,mode="valid")
+        # self._save_predictions(subj_test,total_out_test, mode="test") 
                 
-            # evaluate 
-            self._evaluate_metrics(subj_valid, total_out_valid, mode="valid")
-            self._evaluate_metrics(subj_test, total_out_test, mode="test")
+        # evaluate 
+        self._evaluate_metrics(subj_valid, total_out_valid, mode="valid")
+        self._evaluate_metrics(subj_test, total_out_test, mode="test")
             
     # If you use loggers other than Neptune you may need to modify this
     def _save_predictions(self,total_subjs,total_out, mode):
@@ -291,23 +301,34 @@ class LitClassifier(pl.LightningModule):
                 pickle.dump(self.subject_accuracy, fw)
 
     def test_step(self, batch, batch_idx):
+        """
+        Processes a single test batch to compute logits and targets, 
+        returning subject IDs and corresponding predictions for evaluation.
+        """
         subj, logits, target = self._compute_logits(batch)
-        output = torch.stack([logits.squeeze(), target.squeeze()], dim=1)
+        output = [(logit.cpu().detach(), targets.cpu().item()) for logit, targets in zip(logits, target)]
         return (subj, output)
 
     def test_epoch_end(self, outputs):
-        if not self.hparams.pretraining:
-            subj_test = [] 
-            out_test_list = []
-            for subj, out in outputs:
-                subj_test += subj
-                out_test_list.append(out.detach())
-            subj_test = np.array(subj_test)
-            total_out_test = torch.cat(out_test_list, dim=0)
-            # self._save_predictions(subj_test, total_out_test, mode="test") 
-            self._evaluate_metrics(subj_test, total_out_test, mode="test")
+        """
+        Aggregates test outputs at the end of an epoch, consolidating subject IDs and predictions for evaluation.
+        """
+        subj_test = [] 
+        out_test_list = []
+        for subj, out in outputs:
+            subj_test += subj
+            out_test_list.append(out.detach())
+
+        subj_test = np.array(subj_test)
+        total_out_test = [item for sublist in out_test_list for item in sublist]
+                    
+        self._evaluate_metrics(subj_test, total_out_test, mode="test")
     
     def on_train_epoch_start(self) -> None:
+        """
+        Initializes GPU timing events and timing variables to measure training performance 
+        at the start of each training epoch.
+        """
         self.starter, self.ender = torch.cuda.Event(enable_timing=True), torch.cuda.Event(enable_timing=True)
         self.total_time = 0
         self.repetitions = 200
@@ -316,6 +337,10 @@ class LitClassifier(pl.LightningModule):
         return super().on_train_epoch_start()
     
     def on_train_batch_start(self, batch, batch_idx):
+        """
+        Records GPU start timing for selected batches during training 
+        to perform scalability checks if enabled.
+        """
         if self.hparams.scalability_check:
             if batch_idx < self.gpu_warmup:
                 pass
@@ -324,6 +349,10 @@ class LitClassifier(pl.LightningModule):
         return super().on_train_batch_start(batch, batch_idx)
     
     def on_train_batch_end(self, out, batch, batch_idx):
+        """
+        Records GPU end timing and calculates performance metrics such as throughput, mean time, 
+        and standard deviation for selected batches during training if scalability checks are enabled.
+        """
         if self.hparams.scalability_check:
             if batch_idx < self.gpu_warmup:
                 pass
@@ -347,10 +376,11 @@ class LitClassifier(pl.LightningModule):
                 
         return super().on_train_batch_end(out, batch, batch_idx)
 
-
-    # def on_before_optimizer_step(self, optimizer, optimizer_idx: int) -> None:
-
     def configure_optimizers(self):
+        """
+        Configures the optimizer (AdamW or SGD) and optionally a learning rate scheduler 
+        with warm-up and cosine annealing for training.
+        """
         if self.hparams.optimizer == "AdamW":
             optim = torch.optim.AdamW(
                 self.parameters(), lr=self.hparams.learning_rate, weight_decay=self.hparams.weight_decay
@@ -392,7 +422,6 @@ class LitClassifier(pl.LightningModule):
         parser = ArgumentParser(parents=[parent_parser], add_help=False, formatter_class=ArgumentDefaultsHelpFormatter)
         group = parser.add_argument_group("Default classifier")
         # training related
-        #group.add_argument("--grad_clip", action='store_true', help="whether to use gradient clipping")
         group.add_argument("--optimizer", type=str, default="AdamW", help="which optimizer to use [AdamW, SGD]")
         group.add_argument("--use_scheduler", action='store_true', help="whether to use scheduler")
         group.add_argument("--weight_decay", type=float, default=0.01, help="weight decay for optimizer")
@@ -401,12 +430,11 @@ class LitClassifier(pl.LightningModule):
         group.add_argument("--gamma", type=float, default=1.0, help="decay for exponential LR scheduler")
         group.add_argument("--cycle", type=float, default=0.3, help="cycle size for CosineAnnealingWarmUpRestarts")
         group.add_argument("--milestones", nargs="+", default=[100, 150], type=int, help="lr scheduler")
-        group.add_argument("--adjust_thresh", action='store_true', help="whether to adjust threshold for valid/test")
         
         # pretraining-related
-        group.add_argument("--use_contrastive", action='store_true', help="whether to use contrastive learning (specify --contrastive_type argument as well)")
-        group.add_argument("--contrastive_type", default=0, type=int, help="combination of contrastive losses to use [1: Use the Instance contrastive loss function, 2: Use the local-local temporal contrastive loss function, 3: Use the sum of both loss functions]")
-        group.add_argument("--pretraining", action='store_true', help="whether to use pretraining")
+        #group.add_argument("--use_contrastive", action='store_true', help="whether to use contrastive learning (specify --contrastive_type argument as well)")
+        #group.add_argument("--contrastive_type", default=0, type=int, help="combination of contrastive losses to use [1: Use the Instance contrastive loss function, 2: Use the local-local temporal contrastive loss function, 3: Use the sum of both loss functions]")
+        #group.add_argument("--pretraining", action='store_true', help="whether to use pretraining")
         group.add_argument("--augment_during_training", action='store_true', help="whether to augment input images during training")
         group.add_argument("--augment_only_affine", action='store_true', help="whether to only apply affine augmentation")
         group.add_argument("--augment_only_intensity", action='store_true', help="whether to only apply intensity augmentation")
@@ -432,5 +460,6 @@ class LitClassifier(pl.LightningModule):
         
         # decoder related
         group.add_argument("--num_classes", type=int, default=2, help="Number of distinct target classes")
+        group.add_argument("--decoder", type=int, default=1, help="Which decoder to use: (i) single_target_decoder - predict a single value via regression or classification | (ii) series_decoder: predict a series of values (one per timeframe) via regression")
         
         return parser

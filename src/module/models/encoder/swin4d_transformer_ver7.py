@@ -4,7 +4,7 @@ https://docs.monai.io/en/stable/_modules/monai/networks/nets/swin_unetr.html#Swi
 """
 
 import itertools
-from typing import Optional, Sequence, Tuple, Type, Union
+from typing import Optional, Sequence, Tuple, Type
 
 import numpy as np
 import torch
@@ -835,5 +835,8 @@ class SwinTransformer4D(nn.Module):
         for i in range(self.num_layers):
             x = self.pos_embeds[i](x)
             x = self.layers[i](x.contiguous())
+        
+        # for decoder
+        x = x.flatten(start_dim=2) #.transpose(1, 2) # B L C
 
         return x

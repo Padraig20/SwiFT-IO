@@ -1,5 +1,5 @@
-from .SwiFT.swin4d_transformer_ver7 import SwinTransformer4D
-from .PerceiverIO.single_target_decoder import SingleTargetDecoder
+from .encoder.swin4d_transformer_ver7 import SwinTransformer4D
+from .decoder.single_target_decoder import SingleTargetDecoder
 
 def load_model(model_name, hparams=None):
 
@@ -10,11 +10,12 @@ def load_model(model_name, hparams=None):
         
     h, w, d, t = hparams.img_size
     hp, wp, dp, tp = hparams.patch_size
-        
-    h = h // hp // hp // hp
-    w = w // wp // hp // hp
-    d = d // dp // dp // dp
-    t = t // tp // tp // tp
+    
+    h = h // (hp*8) if hp != 1 else h
+    w = w // (wp*8) if wp != 1 else w
+    d = d // (dp*8) if dp != 1 else d
+    t = t // (tp*8) if tp != 1 else t
+
     embed_dim = hparams.embed_dim * 8
     
     dims = h * w * d * t
