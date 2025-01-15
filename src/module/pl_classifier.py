@@ -215,11 +215,11 @@ class LitClassifier(pl.LightningModule):
                     logits_group = subj_avg_logits[:,:,i]  # Shape: [batch_size, temporal_size, num_classes]
                     target_group = subj_targets[..., i]
                     
-                    probabilities = F.softmax(subj_avg_logits.to(dtype=torch.float32), dim=-1) # (b, temporal_size, num_classes), require 32 bit precision
+                    probabilities = F.softmax(logits_group.to(dtype=torch.float32), dim=-1) # (b, temporal_size, num_classes), require 32 bit precision
                     predictions = probabilities.argmax(dim=-1) # (b, temporal_size)
                     
                     predictions_np = predictions.flatten().cpu().numpy()
-                    targets_np = subj_targets.flatten().cpu().numpy()
+                    targets_np = target_group.flatten().cpu().numpy()
                     
                     accuracy_group = accuracy_score(targets_np, predictions_np)
                     balanced_accuracy_group = balanced_accuracy_score(targets_np, predictions_np)
@@ -228,7 +228,7 @@ class LitClassifier(pl.LightningModule):
                         roc_auc_group = roc_auc_score(targets_np, predictions_np)
                     else: 
                         targets_one_hot = label_binarize(targets_np, classes=np.arange(num_classes))
-                        roc_auc_group = roc_auc_score(targets_one_hot, probabilities.cpu().detach().numpy(), multi_class='ovr')
+                        roc_auc_group = roc_auc_score(targets_one_hot, rearrange(probabilities, 'b t c -> (b t) c').cpu().detach().numpy(), multi_class='ovr')
                     
                     self.log(f"{mode}_acc_{i}", accuracy_group, sync_dist=True)
                     self.log(f"{mode}_balacc_{i}", balanced_accuracy_group, sync_dist=True)
