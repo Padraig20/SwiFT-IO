@@ -160,11 +160,19 @@ class LitClassifier(pl.LightningModule):
         subj_targets = []
         for subj in subjects:
             subj_logits = [total_out[i][0] for i in range(len(subj_array)) if subj_array[i] == subj]
-            subj_avg_logits.append(torch.mean(torch.stack(subj_logits), dim=0))
+            if self.hparams.decoder == 'series_decoder': # do not calculate the average logits
+                subj_avg_logits.append(subj_logits)
+            else:
+                subj_avg_logits.append(torch.mean(torch.stack(subj_logits), dim=0))
             subj_targets.append([total_out[i][1] for i in range(len(subj_array)) if subj_array[i] == subj][0])
     
-        subj_avg_logits = torch.stack(subj_avg_logits)
-        subj_targets = torch.tensor(subj_targets)
+        if self.hparams.decoder == 'series_decoder':
+            subj_avg_logits = [i[0] for i in subj_avg_logits] # unpack single values from the list
+            subj_avg_logits = torch.stack(subj_avg_logits)
+            subj_targets = torch.stack(subj_targets)
+        else:
+            subj_avg_logits = torch.stack(subj_avg_logits)
+            subj_targets = torch.tensor(subj_targets)
     
         if self.hparams.downstream_task_type == 'classification':
             num_classes = subj_avg_logits.shape[1]
@@ -202,41 +210,47 @@ class LitClassifier(pl.LightningModule):
                 adjusted_mse = F.mse_loss(subj_avg_logits * (self.scaler.data_max_[0] - self.scaler.data_min_[0]) + self.scaler.data_min_[0], subj_targets * (self.scaler.data_max_[0] - self.scaler.data_min_[0]) + self.scaler.data_min_[0])
                 adjusted_mae = F.l1_loss(subj_avg_logits * (self.scaler.data_max_[0] - self.scaler.data_min_[0]) + self.scaler.data_min_[0], subj_targets * (self.scaler.data_max_[0] - self.scaler.data_min_[0]) + self.scaler.data_min_[0])
             pearson = PearsonCorrCoef()
-            pearson_coef = pearson(subj_avg_logits, subj_targets)
             
-            # evaluate multiple targets separately
-            t = subj_avg_logits.shape[1] // self.hparams.num_classes
+            if self.hparams.decoder == 'series_decoder':
+                pearson_coef = pearson(subj_avg_logits.flatten(), subj_targets.flatten())
+            else:
+                pearson_coef = pearson(subj_avg_logits, subj_targets)
             
-            subj_avg_logits = subj_avg_logits.view(-1, t ,self.hparams.num_classes)
-            subj_targets = subj_targets.view(-1, t ,self.hparams.num_classes)
-            
-            for i in range(self.hparams.num_classes):
-                logits_group = subj_avg_logits[..., i]  # Shape: [batch_size, temporal_size]
-                target_group = subj_targets[..., i]
-                    
-                mse_group = F.mse_loss(logits_group, target_group)  # target is float
-                mae_group = F.l1_loss(logits_group, target_group)
+            if self.hparams.decoder == 'series_decoder':
                 
-                pearson_coef_group = pearson(subj_avg_logits, subj_targets)
+                # evaluate multiple targets separately
+                t = subj_avg_logits.shape[1] // self.hparams.num_classes
+            
+                subj_avg_logits = subj_avg_logits.view(-1, t ,self.hparams.num_classes)
+                subj_targets = subj_targets.view(-1, t ,self.hparams.num_classes)
+            
+                for i in range(self.hparams.num_classes):
+                    logits_group = subj_avg_logits[..., i]  # Shape: [batch_size, temporal_size]
+                    target_group = subj_targets[..., i]
                 
-                if self.hparams.label_scaling_method == 'standardization': # default
-                    adjusted_mse_group = F.mse_loss(logits_group * self.scaler.scale_[0] + self.scaler.mean_[0], target_group * self.scaler.scale_[0] + self.scaler.mean_[0])
-                    adjusted_mae_group = F.l1_loss(logits_group * self.scaler.scale_[0] + self.scaler.mean_[0], target_group * self.scaler.scale_[0] + self.scaler.mean_[0])
-                elif self.hparams.label_scaling_method == 'minmax':
-                    adjusted_mse_group = F.mse_loss(logits_group * (self.scaler.data_max_[0] - self.scaler.data_min_[0]) + self.scaler.data_min_[0], target_group * (self.scaler.data_max_[0] - self.scaler.data_min_[0]) + self.scaler.data_min_[0])
-                    adjusted_mae_group = F.l1_loss(logits_group * (self.scaler.data_max_[0] - self.scaler.data_min_[0]) + self.scaler.data_min_[0], target_group * (self.scaler.data_max_[0] - self.scaler.data_min_[0]) + self.scaler.data_min_[0])
+                    mse_group = F.mse_loss(logits_group, target_group)  # target is float
+                    mae_group = F.l1_loss(logits_group, target_group)
+                
+                    pearson_coef_group = pearson(subj_avg_logits.flatten(), subj_targets.flatten())
+                
+                    if self.hparams.label_scaling_method == 'standardization': # default
+                        adjusted_mse_group = F.mse_loss(logits_group * self.scaler.scale_[0] + self.scaler.mean_[0], target_group * self.scaler.scale_[0] + self.scaler.mean_[0])
+                        adjusted_mae_group = F.l1_loss(logits_group * self.scaler.scale_[0] + self.scaler.mean_[0], target_group * self.scaler.scale_[0] + self.scaler.mean_[0])
+                    elif self.hparams.label_scaling_method == 'minmax':
+                        adjusted_mse_group = F.mse_loss(logits_group * (self.scaler.data_max_[0] - self.scaler.data_min_[0]) + self.scaler.data_min_[0], target_group * (self.scaler.data_max_[0] - self.scaler.data_min_[0]) + self.scaler.data_min_[0])
+                        adjusted_mae_group = F.l1_loss(logits_group * (self.scaler.data_max_[0] - self.scaler.data_min_[0]) + self.scaler.data_min_[0], target_group * (self.scaler.data_max_[0] - self.scaler.data_min_[0]) + self.scaler.data_min_[0])
 
-                self.log(f"{mode}_corrcoef_{i}", pearson_coef_group, sync_dist=True)
-                self.log(f"{mode}_mse_{i}", mse_group, sync_dist=True)
-                self.log(f"{mode}_mae_{i}", mae_group, sync_dist=True)
-                self.log(f"{mode}_adjusted_mse_{i}", adjusted_mse_group, sync_dist=True)
-                self.log(f"{mode}_adjusted_mae_{i}", adjusted_mae_group, sync_dist=True)
+                    self.log(f"{mode}_corrcoef_{i}", pearson_coef_group, sync_dist=True)
+                    self.log(f"{mode}_mse_{i}", mse_group, sync_dist=True)
+                    self.log(f"{mode}_mae_{i}", mae_group, sync_dist=True)
+                    self.log(f"{mode}_adjusted_mse_{i}", adjusted_mse_group, sync_dist=True)
+                    self.log(f"{mode}_adjusted_mae_{i}", adjusted_mae_group, sync_dist=True)
             
             self.log(f"{mode}_corrcoef", pearson_coef, sync_dist=True)
             self.log(f"{mode}_mse", mse, sync_dist=True)
             self.log(f"{mode}_mae", mae, sync_dist=True)
             self.log(f"{mode}_adjusted_mse", adjusted_mse, sync_dist=True) 
-            self.log(f"{mode}_adjusted_mae", adjusted_mae, sync_dist=True) 
+            self.log(f"{mode}_adjusted_mae", adjusted_mae, sync_dist=True)
 
     def training_step(self, batch, batch_idx):
         """
@@ -251,7 +265,10 @@ class LitClassifier(pl.LightningModule):
         returning subject IDs and corresponding predictions for evaluation.
         """
         subj, logits, target = self._compute_logits(batch) #(b, num_classes)
-        output = [(logit.cpu().detach(), targets.cpu().item()) for logit, targets in zip(logits, target)]
+        if self.hparams.decoder == 'series_decoder': # (batch, T, E) -> (batch, T*E)
+            output = [(logit.cpu().detach(), targets.cpu()) for logit, targets in zip(logits, target)] # target is not single value, item() cannot be invoked
+        else:
+            output = [(logit.cpu().detach(), targets.cpu().item()) for logit, targets in zip(logits, target)]
         return (subj, output)
 
     def validation_epoch_end(self, outputs):
@@ -335,8 +352,11 @@ class LitClassifier(pl.LightningModule):
         Processes a single test batch to compute logits and targets, 
         returning subject IDs and corresponding predictions for evaluation.
         """
-        subj, logits, target = self._compute_logits(batch)
-        output = [(logit.cpu().detach(), targets.cpu().item()) for logit, targets in zip(logits, target)]
+        subj, logits, target = self._compute_logits(batch) #(b, num_classes)
+        if self.hparams.decoder == 'series_decoder': # (batch, T, E) -> (batch, T*E)
+            output = [(logit.cpu().detach(), targets.cpu()) for logit, targets in zip(logits, target)] # target is not single value, item() cannot be invoked
+        else:
+            output = [(logit.cpu().detach(), targets.cpu().item()) for logit, targets in zip(logits, target)]
         return (subj, output)
 
     def test_epoch_end(self, outputs):

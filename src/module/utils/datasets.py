@@ -60,7 +60,7 @@ class BaseDataset(Dataset):
     
 class Dummy(BaseDataset):
     def __init__(self, **kwargs):
-        super().__init__(**kwargs, total_samples=100000)
+        super().__init__(**kwargs, total_samples=1000)
         
 
     def _set_data(self, root, subject_dict):
@@ -84,11 +84,15 @@ class Dummy(BaseDataset):
         sex = torch.randint(0,2,(1,)).float()
         
         # classification
-        num_classes = 2
-        target = torch.randint(0,num_classes,(1,)).float()
+        #num_classes = 2
+        #target = torch.randint(0,num_classes,(1,)).float()
         
         # regression
         #target = torch.rand(1)
+        
+        # series decoder
+        num_classes = 7
+        target = torch.randn(20, num_classes)
         
         return {
                 "fmri_sequence": y,
