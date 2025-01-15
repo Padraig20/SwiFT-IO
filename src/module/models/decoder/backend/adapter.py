@@ -17,7 +17,6 @@ class SeriesClassificationOutputAdapter(OutputAdapter):
         self.linear = nn.Linear(num_output_query_channels, num_classes*num_targets)
 
     def forward(self, x):
-        print(f"Before: {x.shape}")
         x = self.linear(x).squeeze(dim=1)
         x = rearrange(x, 'b t (ta c) -> b t ta c', ta=self.num_targets) # (batch_size, time_sequence, num_targets, num_classes)
         return x if x.shape[-1] > 1 else x.squeeze() # (batch_size, time_sequence, num_targets) for regression
