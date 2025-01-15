@@ -134,6 +134,9 @@ class LitClassifier(pl.LightningModule):
         subj, logits, target = self._compute_logits(batch, augment_during_training = self.hparams.augment_during_training)
 
         if self.hparams.downstream_task_type == 'classification':
+            if self.hparams.decoder == 'series_decoder': # [b, (t ta), c] -> [(b t ta), c]
+                logits = rearrange(logits, 'b tta c -> (b tta) c')
+                target = target.flatten() # (b,c) -> (b*c)
             loss = F.cross_entropy(logits, target.long()) # target is float
             acc = self.metric.get_accuracy(logits, target.float().squeeze())
             result_dict = {
@@ -178,6 +181,11 @@ class LitClassifier(pl.LightningModule):
             subj_targets = torch.tensor(subj_targets)
     
         if self.hparams.downstream_task_type == 'classification':
+            
+            if self.hparams.decoder == 'series_decoder':
+                subj_avg_logits = rearrange(subj_avg_logits, 'b h c -> (b h) c')
+                subj_targets = subj_targets.flatten()
+                
             num_classes = subj_avg_logits.shape[1]
             
             probabilities = F.softmax(subj_avg_logits.to(dtype=torch.float32), dim=1) # (b,num_classes), require 32 bit precision

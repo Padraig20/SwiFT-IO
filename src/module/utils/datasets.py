@@ -90,9 +90,14 @@ class Dummy(BaseDataset):
         # regression
         #target = torch.rand(1)
         
-        # series decoder
-        num_classes = 7
-        target = torch.randn(20, num_classes)
+        # series decoder regression
+        #num_targets = 7
+        #target = torch.randn(20, num_targets)
+        
+        # series decoder classification
+        num_targets = 7
+        num_classes = 2
+        target = torch.randint(0,num_classes,(20,num_targets)).float()
         
         return {
                 "fmri_sequence": y,
