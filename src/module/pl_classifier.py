@@ -104,8 +104,11 @@ class LitClassifier(pl.LightningModule):
 
         # Classification task
         if self.hparams.downstream_task_type == 'classification':
-            logits = self.output_head(feature).squeeze() # (b,num_classes)
-            target = target_value.float().squeeze() # (b,num_classes)
+            logits = self.output_head(feature).squeeze() # (b,num_classes)  /  (b,t,num_targets,num_classes)
+            target = target_value.float().squeeze()      # (b,num_classes)  /  (b,t,num_targets,num_classes)
+            if self.hparams.decoder == 'series_decoder':
+                logits = rearrange(logits, 'b t ta c -> b (t ta) c')
+                target = rearrange(target, 'b t ta -> b (t ta)')
         # Regression task
         elif self.hparams.downstream_task_type == 'regression':
             
