@@ -183,7 +183,7 @@ class LitClassifier(pl.LightningModule):
         if self.hparams.downstream_task_type == 'classification':
             
             if self.hparams.decoder == 'series_decoder':
-                subj_avg_logits = rearrange(subj_avg_logits, 'b h c -> (b h) c')
+                subj_avg_logits = rearrange(subj_avg_logits, 'b tta c -> (b tta) c')
                 subj_targets = subj_targets.flatten()
                 
             num_classes = subj_avg_logits.shape[1]
@@ -203,6 +203,37 @@ class LitClassifier(pl.LightningModule):
                 targets_one_hot = label_binarize(targets_np, classes=np.arange(num_classes))
                 roc_auc = roc_auc_score(targets_one_hot, probabilities.cpu().detach().numpy(), multi_class='ovr')
 
+            if self.hparams.decoder == 'series_decoder':
+                
+                # evaluate multiple targets separately
+                t = self.hparams.img_size[3]
+
+                subj_avg_logits = rearrange(subj_avg_logits, '(b t ta c) -> b t ta c', t=t, ta=self.hparams.num_targets, c=self.hparams.num_classes)
+                subj_targets = rearrange(subj_targets, '(b t ta) -> b t ta', t=t, ta=self.hparams.num_targets)
+            
+                for i in range(self.hparams.num_targets):
+                    logits_group = subj_avg_logits[..., i]  # Shape: [batch_size, temporal_size, num_classes]
+                    target_group = subj_targets[..., i]
+                    
+                    probabilities = F.softmax(subj_avg_logits.to(dtype=torch.float32), dim=-1) # (b, temporal_size, num_classes), require 32 bit precision
+                    predictions = probabilities.argmax(dim=-1) # (b, temporal_size)
+                    
+                    predictions_np = predictions.flatten().cpu().numpy()
+                    targets_np = subj_targets.cpu().numpy()
+                    
+                    accuracy_group = accuracy_score(targets_np, predictions_np)
+                    balanced_accuracy_group = balanced_accuracy_score(targets_np, predictions_np)
+                    
+                    if num_classes == 2:
+                        roc_auc_group = roc_auc_score(targets_np, predictions_np)
+                    else: 
+                        targets_one_hot = label_binarize(targets_np, classes=np.arange(num_classes))
+                        roc_auc_group = roc_auc_score(targets_one_hot, probabilities.cpu().detach().numpy(), multi_class='ovr')
+                    
+                    self.log(f"{mode}_acc_{i}", accuracy_group, sync_dist=True)
+                    self.log(f"{mode}_balacc_{i}", balanced_accuracy_group, sync_dist=True)
+                    self.log(f"{mode}_AUROC_{i}", roc_auc_group, sync_dist=True)
+                
             self.log(f"{mode}_acc", accuracy, sync_dist=True)
             self.log(f"{mode}_balacc", balanced_accuracy, sync_dist=True)
             self.log(f"{mode}_AUROC", roc_auc, sync_dist=True)
@@ -230,12 +261,12 @@ class LitClassifier(pl.LightningModule):
             if self.hparams.decoder == 'series_decoder':
                 
                 # evaluate multiple targets separately
-                t = subj_avg_logits.shape[1] // self.hparams.num_classes
+                t = self.hparams.img_size[3]
             
-                subj_avg_logits = subj_avg_logits.view(-1, t ,self.hparams.num_classes)
-                subj_targets = subj_targets.view(-1, t ,self.hparams.num_classes)
+                subj_avg_logits = subj_avg_logits.view(-1, t ,self.hparams.num_targets) # (b, t*num_targets) -> (b, t, num_targets)
+                subj_targets = subj_targets.view(-1, t ,self.hparams.num_targets) # (b, t*num_targets) -> (b, t, num_targets)
             
-                for i in range(self.hparams.num_classes):
+                for i in range(self.hparams.num_targets):
                     logits_group = subj_avg_logits[..., i]  # Shape: [batch_size, temporal_size]
                     target_group = subj_targets[..., i]
                 
