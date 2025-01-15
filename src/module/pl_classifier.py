@@ -208,18 +208,18 @@ class LitClassifier(pl.LightningModule):
                 # evaluate multiple targets separately
                 t = self.hparams.img_size[3]
 
-                subj_avg_logits = rearrange(subj_avg_logits, '(b t ta c) -> b t ta c', t=t, ta=self.hparams.num_targets, c=self.hparams.num_classes)
+                subj_avg_logits = rearrange(subj_avg_logits, '(b t ta) c -> b t ta c', t=t, ta=self.hparams.num_targets, c=self.hparams.num_classes)
                 subj_targets = rearrange(subj_targets, '(b t ta) -> b t ta', t=t, ta=self.hparams.num_targets)
             
                 for i in range(self.hparams.num_targets):
-                    logits_group = subj_avg_logits[..., i]  # Shape: [batch_size, temporal_size, num_classes]
+                    logits_group = subj_avg_logits[:,:,i]  # Shape: [batch_size, temporal_size, num_classes]
                     target_group = subj_targets[..., i]
                     
                     probabilities = F.softmax(subj_avg_logits.to(dtype=torch.float32), dim=-1) # (b, temporal_size, num_classes), require 32 bit precision
                     predictions = probabilities.argmax(dim=-1) # (b, temporal_size)
                     
                     predictions_np = predictions.flatten().cpu().numpy()
-                    targets_np = subj_targets.cpu().numpy()
+                    targets_np = subj_targets.flatten().cpu().numpy()
                     
                     accuracy_group = accuracy_score(targets_np, predictions_np)
                     balanced_accuracy_group = balanced_accuracy_score(targets_np, predictions_np)
