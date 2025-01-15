@@ -5,6 +5,23 @@ from torch import nn as nn
 class OutputAdapter(nn.Module):
     """Transforms generic decoder cross-attention output to task-specific output."""
 
+class SeriesClassificationOutputAdapter(OutputAdapter):
+    def __init__(
+        self,
+        num_classes: int,
+        num_output_query_channels: int,
+        num_targets: int
+    ):
+        super().__init__()
+        self.num_targets = num_targets
+        self.linear = nn.Linear(num_output_query_channels, num_classes*num_targets)
+
+    def forward(self, x):
+        print(f"Before: {x.shape}")
+        x = self.linear(x).squeeze(dim=1)
+        x = rearrange(x, 'b t (ta c) -> b t ta c', ta=self.num_targets) # (batch_size, time_sequence, num_targets, num_classes)
+        return x if x.shape[-1] > 1 else x.squeeze() # (batch_size, time_sequence, num_targets) for regression
+
 class ClassificationOutputAdapter(OutputAdapter):
     def __init__(
         self,

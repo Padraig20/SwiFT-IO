@@ -2,7 +2,7 @@ from typing import Optional
 
 import torch.nn as nn
 
-from module.models.decoder.backend.adapter import ClassificationOutputAdapter, TrainableQueryProvider
+from module.models.decoder.backend.adapter import SeriesClassificationOutputAdapter, TrainableQueryProvider
 from module.models.decoder.backend.modules import PerceiverDecoder
 
 class SeriesDecoder(nn.Module):
@@ -23,7 +23,9 @@ class SeriesDecoder(nn.Module):
                  # Classification specific
                  num_output_queries: int = 20, # set to timesteps
                  num_output_query_channels: int = 256,
-                 num_classes: int = 100
+                 num_classes: int = 100,
+                 # Series specific
+                 num_targets: int = 7 # e.g. num of emotions
                  ):
         super().__init__()
 
@@ -34,9 +36,10 @@ class SeriesDecoder(nn.Module):
             init_scale=init_scale,
         )
 
-        output_adapter = ClassificationOutputAdapter(
+        output_adapter = SeriesClassificationOutputAdapter(
             num_classes=num_classes,
             num_output_query_channels=num_output_query_channels,
+            num_targets=num_targets
         )
 
         self.decoder = PerceiverDecoder(

@@ -58,6 +58,7 @@ def load_model(model_name, hparams=None):
             num_classes=num_classes
         )
     elif model_name == "series_decoder":
+        num_classes = 1 if hparams.downstream_task_type == 'regression' else hparams.num_classes
         net = SeriesDecoder(
             num_latents=embed_dim,
             num_latent_channels=dims, # TODO: verify this
@@ -73,7 +74,8 @@ def load_model(model_name, hparams=None):
             #freeze=hparams.freeze,
             num_output_queries=t_orig,
             #num_output_query_channels=hparams.num_output_query_channels,
-            num_classes=hparams.num_classes
+            num_classes=num_classes,
+            num_targets=hparams.num_targets
         )
     else:
         raise NameError(f"{model_name} is a wrong model name")

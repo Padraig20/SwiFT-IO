@@ -511,5 +511,6 @@ class LitClassifier(pl.LightningModule):
         # decoder related
         group.add_argument("--num_classes", type=int, default=2, help="Number of distinct target classes")
         group.add_argument("--decoder", type=str, default="single_target_decoder", help="Which decoder to use: (i) single_target_decoder - predict a single value via regression or classification | (ii) series_decoder: predict a series of values (one per timeframe) via regression")
+        group.add_argument("--num_targets", type=int, default=7, help="Number of targets to predict in series_decoder")
         
         return parser
