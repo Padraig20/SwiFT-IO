@@ -88,6 +88,7 @@ class HBN(BaseDataset):
                 f for f in glob.glob(os.path.join(subject_path, 'frame_*.pt'))
                 if re.search(r'frame_\d+\.pt$', os.path.basename(f))
             ])
+            
             session_duration = num_frames - self.sample_duration + 1 - start_TR
             
             for start_frame in range(start_TR, session_duration, self.stride):
