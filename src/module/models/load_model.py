@@ -15,7 +15,7 @@ def load_model(model_name, hparams=None):
     h = h // (hp*8) if hp != 1 else h
     w = w // (wp*8) if wp != 1 else w
     d = d // (dp*8) if dp != 1 else d
-    t = t_orig // (tp*8) if tp != 1 else t_orig
+    t = t_orig // tp if tp != 1 else t_orig
 
     embed_dim = hparams.embed_dim * 8
     
