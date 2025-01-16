@@ -277,8 +277,8 @@ class LitClassifier(pl.LightningModule):
                     mse_group = F.mse_loss(logits_group, target_group)  # target is float
                     mae_group = F.l1_loss(logits_group, target_group)
                 
-                    pearson_coef_group = pearson(subj_avg_logits.flatten(), subj_targets.flatten())
-                    r2_group = r2_score(subj_avg_logits.flatten(), subj_targets.flatten()) 
+                    pearson_coef_group = pearson(logits_group.flatten(), target_group.flatten())
+                    r2_group = r2_score(logits_group.flatten(), target_group.flatten()) 
 
                     if self.hparams.label_scaling_method == 'standardization': # default
                         adjusted_mse_group = F.mse_loss(logits_group * self.scaler.scale_[0] + self.scaler.mean_[0], target_group * self.scaler.scale_[0] + self.scaler.mean_[0])
