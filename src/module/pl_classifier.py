@@ -7,6 +7,7 @@ import os
 import pickle
 
 from torchmetrics import PearsonCorrCoef # Accuracy,
+from torchmetrics.regression import R2Score
 from sklearn.metrics import balanced_accuracy_score, accuracy_score, roc_auc_score
 from sklearn.preprocessing import label_binarize
 import monai.transforms as monai_t
@@ -60,7 +61,7 @@ class LitClassifier(pl.LightningModule):
         img = rearrange(img, 'b c h w d t -> b t c h w d')
 
         rand_affine = monai_t.RandAffine(
-            prob=1.0,
+            prob=0.5, # we are using 0.5 rather than 1.0 in SwiFT v2 research.
             # 0.175 rad = 10 degrees
             rotate_range=(0.175, 0.175, 0.175),
             scale_range = (0.1, 0.1, 0.1),
@@ -252,11 +253,14 @@ class LitClassifier(pl.LightningModule):
                 adjusted_mse = F.mse_loss(subj_avg_logits * (self.scaler.data_max_[0] - self.scaler.data_min_[0]) + self.scaler.data_min_[0], subj_targets * (self.scaler.data_max_[0] - self.scaler.data_min_[0]) + self.scaler.data_min_[0])
                 adjusted_mae = F.l1_loss(subj_avg_logits * (self.scaler.data_max_[0] - self.scaler.data_min_[0]) + self.scaler.data_min_[0], subj_targets * (self.scaler.data_max_[0] - self.scaler.data_min_[0]) + self.scaler.data_min_[0])
             pearson = PearsonCorrCoef()
+            r2_score = R2Score()
             
             if self.hparams.decoder == 'series_decoder':
                 pearson_coef = pearson(subj_avg_logits.flatten(), subj_targets.flatten())
+                r2 = r2_score(subj_avg_logits.flatten(), subj_targets.flatten()) if len(subj_avg_logits) >=2 else 0
             else:
                 pearson_coef = pearson(subj_avg_logits, subj_targets)
+                r2 = r2_score(subj_avg_logits, subj_targets) if len(subj_avg_logits) >=2 else 0
             
             if self.hparams.decoder == 'series_decoder':
                 
@@ -274,7 +278,8 @@ class LitClassifier(pl.LightningModule):
                     mae_group = F.l1_loss(logits_group, target_group)
                 
                     pearson_coef_group = pearson(subj_avg_logits.flatten(), subj_targets.flatten())
-                
+                    r2_group = r2_score(subj_avg_logits.flatten(), subj_targets.flatten()) 
+
                     if self.hparams.label_scaling_method == 'standardization': # default
                         adjusted_mse_group = F.mse_loss(logits_group * self.scaler.scale_[0] + self.scaler.mean_[0], target_group * self.scaler.scale_[0] + self.scaler.mean_[0])
                         adjusted_mae_group = F.l1_loss(logits_group * self.scaler.scale_[0] + self.scaler.mean_[0], target_group * self.scaler.scale_[0] + self.scaler.mean_[0])
@@ -283,12 +288,14 @@ class LitClassifier(pl.LightningModule):
                         adjusted_mae_group = F.l1_loss(logits_group * (self.scaler.data_max_[0] - self.scaler.data_min_[0]) + self.scaler.data_min_[0], target_group * (self.scaler.data_max_[0] - self.scaler.data_min_[0]) + self.scaler.data_min_[0])
 
                     self.log(f"{mode}_corrcoef_{i}", pearson_coef_group, sync_dist=True)
+                    self.log(f"{mode}_r2_score_{i}", r2_group, sync_dist=True)
                     self.log(f"{mode}_mse_{i}", mse_group, sync_dist=True)
                     self.log(f"{mode}_mae_{i}", mae_group, sync_dist=True)
                     self.log(f"{mode}_adjusted_mse_{i}", adjusted_mse_group, sync_dist=True)
                     self.log(f"{mode}_adjusted_mae_{i}", adjusted_mae_group, sync_dist=True)
             
             self.log(f"{mode}_corrcoef", pearson_coef, sync_dist=True)
+            self.log(f"{mode}_r2_score", r2, sync_dist=True)
             self.log(f"{mode}_mse", mse, sync_dist=True)
             self.log(f"{mode}_mae", mae, sync_dist=True)
             self.log(f"{mode}_adjusted_mse", adjusted_mse, sync_dist=True) 

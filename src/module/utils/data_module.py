@@ -229,4 +229,6 @@ class fMRIDataModule(pl.LightningDataModule):
         group.add_argument("--with_voxel_norm", action='store_true')
         group.add_argument("--shuffle_time_sequence", action='store_true')
         group.add_argument("--limit_training_samples", type=int, default=None, help="use if you want to limit training samples")
+        group.add_argument("--adjust_hrf", action='store_true', help="use for HRF effect adjustmenet. shifts start fMRI timeframe from 0TR to 7TR")
+
         return parser

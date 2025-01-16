@@ -1,3 +1,4 @@
+
 # 4D_fMRI_Transformer
 import os
 import torch
@@ -72,6 +73,10 @@ class HBN(BaseDataset):
         print(f"Number of unique subjects: {len(unique_subjects)}")
 
     def _set_data(self, root, subject_dict):
+        if self.adjust_hrf:
+            start_TR = 7
+        else:
+            start_TR = 0
         data = []
         
         img_root = os.path.join(root, 'img') 
@@ -83,9 +88,10 @@ class HBN(BaseDataset):
                 f for f in glob.glob(os.path.join(subject_path, 'frame_*.pt'))
                 if re.search(r'frame_\d+\.pt$', os.path.basename(f))
             ])
-            session_duration = num_frames - self.sample_duration + 1
             
-            for start_frame in range(0, session_duration, self.stride):
+            session_duration = num_frames - self.sample_duration + 1 - start_TR
+            
+            for start_frame in range(start_TR, session_duration, self.stride):
                 if self.decoder == 'series_decoder':
                     data_tuple = (i,
                                 subject_name,
