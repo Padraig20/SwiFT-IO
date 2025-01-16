@@ -1,4 +1,3 @@
-
 # 4D_fMRI_Transformer
 import os
 import torch

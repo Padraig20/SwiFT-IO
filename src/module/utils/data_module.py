@@ -144,6 +144,7 @@ class fMRIDataModule(pl.LightningDataModule):
                 "input_type": self.hparams.input_type,
                 "label_scaling_method" : self.hparams.label_scaling_method,
                 "decoder": self.hparams.decoder,
+                "adjust_hrf": self.hparams.adjust_hrf,
                 "dtype":'float16'}
         
         subject_dict = self.make_subject_dict()
