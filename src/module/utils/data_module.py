@@ -1,9 +1,12 @@
 import os
-import pytorch_lightning as pl
-import numpy as np
-from torch.utils.data import DataLoader
-from .datasets import Dummy
 from argparse import ArgumentParser, ArgumentDefaultsHelpFormatter
+
+import numpy as np
+import pandas as pd
+import pytorch_lightning as pl
+
+from torch.utils.data import DataLoader
+from .datasets import Dummy, HBN
 
 class fMRIDataModule(pl.LightningDataModule):
     def __init__(self, **kwargs):
@@ -25,6 +28,8 @@ class fMRIDataModule(pl.LightningDataModule):
     def get_dataset(self):
         if self.hparams.dataset_name == "Dummy":
             return Dummy
+        elif self.hparams.dataset_name == "HBN":
+            return HBN
         else:
             raise NotImplementedError
 
@@ -80,6 +85,107 @@ class fMRIDataModule(pl.LightningDataModule):
         final_dict = dict()
         
         # TODO implement datasets
+        if "HBN" in self.hparams.dataset_name:
+            if 'emotion' not in self.hparams.downstream_task:
+                meta_data = pd.read_csv(os.path.join(self.hparams.image_path, "metadata", "HBN_metadata_240501_CJB.csv"))
+                subjectkey='SUBJECT_ID'
+
+                if meta_data[self.hparams.downstream_task].dtype == np.int64:
+                    meta_data.loc[:,self.hparams.downstream_task] = meta_data[self.hparams.downstream_task].astype(int)
+
+                if self.hparams.downstream_task == 'sex':
+                    meta_task = meta_data[[subjectkey, self.hparams.downstream_task]].dropna()
+                else:
+                    meta_task = meta_data[[subjectkey, self.hparams.downstream_task, 'sex']].dropna()
+
+                for subject in os.listdir(img_root):
+                    if subject in meta_task[subjectkey].values:
+                        target = meta_task[meta_task[subjectkey]==subject][self.hparams.downstream_task].values[0]
+                        sex = meta_task[meta_task[subjectkey]==subject].values[0]
+                        final_dict[str(subject)] = (sex, target)
+
+            elif self.hparams.downstream_task == 'emotionDM':
+                emotions = ['Anger', 'Happy', 'Fear', 'Sad', 'Excited', 'Positive', 'Negative']
+                smooth_value = self.hparams.smoothing_value
+                smooth_col_suffix = f'_smooth_{smooth_value}'
+                print(f"Using smoothing value: {smooth_value}")
+
+                if self.hparams.hrf == True:
+                    print("HRF convolution will be applied to emotion vectors.")
+                    # meta_data = pd.read_csv("/global/cfs/cdirs/m4750/kimbo/HBN_preproc/6_emocode_convolve/DespicableMe_summary_codes_1.2Hz_intuitivenames_hrfconvolve_241201_07permutation.csv") #TODO: change path
+                    meta_data = pd.read_csv("/data/HBN/0_meta/DespicableMe_summary_codes_1.2Hz_intuitivenames_hrfconvolve_241201_07permutation.csv") #TODO: change path
+                else: 
+                    print("HRF convolution will not be applied to emotion vectors.")
+                    meta_data = pd.read_csv("/data/HBN/0_meta/EmoCodes/emocode_dm_240829.csv") #TODO: change path
+                # print('col of meta_data', meta_data.columns)
+                if self.hparams.downstream_task_type == 'regression':
+                    if self.hparams.downstream_task == 'emotionDM':
+                        columns = [f"{emotion}{smooth_col_suffix}_znorm" for emotion in emotions] + ['frame']
+
+                    else: # single task
+                        emotion_column = f"{self.hparams.downstream_task}{smooth_col_suffix}_znorm"
+                        columns = [emotion_column, 'frame']
+
+                    meta_task = meta_data[columns].dropna()
+
+                    for subject in os.listdir(img_root):
+                        sex = 1 # TODO check
+                        if self.hparams.downstream_task == 'emotionDM':
+                            target = meta_task[[f"{emotion}{smooth_col_suffix}_znorm" for emotion in emotions]].values
+                        else:
+                            target = meta_task[[emotion_column]].values
+                        target = target[np.argsort(meta_task['frame'].values)]#[4:] #skips first 4 frames
+                        final_dict[str(subject)] = (sex, target)
+
+                elif self.hparams.downstream_task_type == 'classification':  # classification
+                    # emotionDM 또는 단일 task에 따른 설정
+                    if self.hparams.downstream_task == 'emotionDM':
+                        # emotions 리스트를 사용하여 smooth_05_binary_median 컬럼을 동적으로 생성
+                        if self.hparams.permutation_type == "none":
+                            columns = [f"{emotion}{smooth_col_suffix}_znorm_binary_median" for emotion in emotions] + ['frame']
+                        elif self.hparams.permutation_type in ["random", "simultaneous"]:
+                            columns = [f"{emotion}{smooth_col_suffix}_znorm_{self.hparams.permutation_type}_binary_median" for emotion in emotions] + ['frame']
+                        elif self.hparams.permutation_type in ["shuffle_within_blocks", "shuffle_blocks_order"]:
+                            if self.hparams.block_size is None:
+                                raise ValueError(f"block_size must be specified for permutation_type '{self.hparams.permutation_type}'.")
+                            columns = [f"{emotion}{smooth_col_suffix}_znorm_{self.hparams.permutation_type}_{self.hparams.block_size}_binary_median" for emotion in emotions] + ['frame']
+                        else: 
+                            raise ValueError(f"Unsupported permutation type: {self.hparams.permutation_type}")
+
+                    else:  # Single task
+                        emotion_column = f"{self.hparams.downstream_task}{smooth_col_suffix}_znorm_binary_median"
+                        columns = [emotion_column, 'frame']
+
+                    meta_task = meta_data[columns].dropna()
+
+                    for subject in os.listdir(img_root):
+                        sex = 1  # TODO: Check the actual sex value source
+
+                        # 타겟값을 추출
+                        if self.hparams.downstream_task == 'emotionDM':
+                            if self.hparams.permutation_type == "none":
+                                target_columns = [f"{emotion}{smooth_col_suffix}_znorm_binary_median" for emotion in emotions]
+                            elif self.hparams.permutation_type in ["random", "simultaneous"]:
+                                target_columns = [f"{emotion}{smooth_col_suffix}_znorm_{self.hparams.permutation_type}_binary_median" for emotion in emotions]
+                            elif self.hparams.permutation_type in ["shuffle_within_blocks", "shuffle_blocks_order"]:
+                                if self.hparams.block_size is None:
+                                    raise ValueError(f"block_size must be specified for permutation_type '{self.hparams.permutation_type}'.")
+                                target_columns = [
+                                    f"{emotion}{smooth_col_suffix}_znorm_{self.hparams.permutation_type}_{self.hparams.block_size}_binary_median"
+                                    for emotion in emotions
+                                ]
+                            # 해당 subject의 타겟값을 추출
+                            target = meta_task[target_columns].values
+                        else:
+                            # Single task의 경우
+                            target_columns = [emotion_column]
+                            target = meta_task[target_columns].values
+
+                        # frame 값으로 정렬
+                        target = target[np.argsort(meta_task['frame'].values)]  # [4:] # 첫 4 프레임 생략 가능 (옵션)
+
+                        # 결과 저장
+                        final_dict[str(subject)] = (sex, target)
         
         return final_dict
 

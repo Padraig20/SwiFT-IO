@@ -91,6 +91,9 @@ def cli_main():
 
         logger = NeptuneLogger(run=run, log_model_checkpoints=False)
         dirpath = os.path.join(args.default_root_dir, logger.version)
+    elif args.loggername.lower() == 'none': # jub added for no logger
+        logger = None
+        dirpath = args.default_root_dir
     else:
         raise Exception("Wrong logger name.")
 
@@ -115,7 +118,7 @@ def cli_main():
         )
 
     lr_monitor = LearningRateMonitor(logging_interval="step")
-    callbacks = [checkpoint_callback, lr_monitor]
+    callbacks = [checkpoint_callback, lr_monitor] if args.loggername.lower() != 'none' else [checkpoint_callback] # jub change
 
     # ------------ trainer -------------
     if args.grad_clip:
