@@ -89,10 +89,7 @@ class fMRIDataModule(pl.LightningDataModule):
             if 'emotion' not in self.hparams.downstream_task:
                 meta_data = pd.read_csv(os.path.join(self.hparams.image_path, "metadata", "HBN_metadata_240501_CJB.csv"))
                 subjectkey='SUBJECT_ID'
-
-                if meta_data[self.hparams.downstream_task].dtype == np.int64:
-                    meta_data.loc[:,self.hparams.downstream_task] = meta_data[self.hparams.downstream_task].astype(int)
-
+                
                 if self.hparams.downstream_task == 'sex':
                     meta_task = meta_data[[subjectkey, self.hparams.downstream_task]].dropna()
                 else:
@@ -101,7 +98,7 @@ class fMRIDataModule(pl.LightningDataModule):
                 for subject in os.listdir(img_root):
                     if subject in meta_task[subjectkey].values:
                         target = meta_task[meta_task[subjectkey]==subject][self.hparams.downstream_task].values[0]
-                        sex = meta_task[meta_task[subjectkey]==subject].values[0]
+                        sex = meta_task[meta_task[subjectkey]==subject]['sex'].values[0]
                         final_dict[str(subject)] = (sex, target)
 
             elif self.hparams.downstream_task == 'emotionDM':

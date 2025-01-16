@@ -45,7 +45,7 @@ class BaseDataset(Dataset):
                 
         for fname in load_fnames:
             img_path = os.path.join(subject_path, fname)
-            y_i = torch.load(img_path).unsqueeze(0)
+            y_i = torch.load(img_path,weights_only=True).unsqueeze(0)
             y.append(y_i)
         y = torch.cat(y, dim=4)
         return y
@@ -127,7 +127,9 @@ class HBN(BaseDataset):
         for i, subject_name in enumerate(subject_dict):
             sex, target = subject_dict[subject_name]
             subject_path = os.path.join(img_root, subject_name)
-            num_frames = len(glob.glob(os.path.join(subject_path,'frame_*'))) # voxel mean & std
+            all_frames = glob.glob(os.path.join(subject_path,'frame_*'))
+            single_frames = [*filter(lambda x: 'seq' not in x, all_frames)]
+            num_frames = len(single_frames) # voxel mean & std
             #num_frames = 250 # TODO remove this line, just for testing
             session_duration = num_frames - self.sample_duration + 1
             
@@ -156,7 +158,7 @@ class HBN(BaseDataset):
 
         if hasattr(self, 'time_as_channel') and self.time_as_channel:
             y = y.permute(0,4,1,2,3).squeeze()
-        print(type(y), type(subject_name), type(target), type(start_frame), type(sex))
+
         return {
             "fmri_sequence": y,
             "subject_name": subject_name,
