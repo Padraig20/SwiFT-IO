@@ -1,8 +1,9 @@
 import os
 import pytorch_lightning as pl
 import numpy as np
+import pandas as pd
 from torch.utils.data import DataLoader
-from .datasets import Dummy
+from .datasets import Dummy, HBN
 from argparse import ArgumentParser, ArgumentDefaultsHelpFormatter
 
 class fMRIDataModule(pl.LightningDataModule):
@@ -25,8 +26,10 @@ class fMRIDataModule(pl.LightningDataModule):
     def get_dataset(self):
         if self.hparams.dataset_name == "Dummy":
             return Dummy
+        elif self.hparams.dataset_name == "HBN":
+            return HBN
         else:
-            raise NotImplementedError
+            raise NotImplementedError(f"Dataset {self.hparams.dataset_name} not implemented")
 
     def convert_subject_list_to_idx_list(self, train_names, val_names, test_names, subj_list):
         #subj_idx = np.array([str(x[0]) for x in subj_list])
@@ -79,7 +82,49 @@ class fMRIDataModule(pl.LightningDataModule):
         img_root = os.path.join(self.hparams.image_path, 'img')
         final_dict = dict()
         
-        # TODO implement datasets
+        if self.hparams.dataset_name == 'HBN':
+            emotions = ['Anger', 'Happy', 'Fear', 'Sad', 'Excited', 'Positive', 'Negative']
+            contents = ['Closeup', 'Body', 'Face', 'NumberCharacters', 'SpokenWords', 'WrittenWords']
+            features = ['Brightness', 'SaliencyFraction', 'Sharpness', 'Vibrance', 'Loudness', 'Motion', 'Tempo', 'LowLevelChange']
+
+            if self.hparams.decoder == 'single_target_decoder':
+                if self.hparams.downstream_task == 'sex': task_name = 'sex'
+                elif self.hparams.downstream_task == 'age': task_name = 'age'
+                else: raise ValueError('downstream task not supported')
+                
+                meta_data = pd.read_csv(os.path.join(self.hparams.image_path, "metadata", "HBN_metadata_240501_CJB.csv"))
+                if task_name == 'sex':
+                    meta_task = meta_data[['SUBJECT_ID',task_name]].dropna()
+                else:
+                    meta_task = meta_data[['SUBJECT_ID',task_name,'sex']].dropna()
+
+                for subject in os.listdir(img_root):
+                    if subject in meta_task['SUBJECT_ID'].values:
+                        target = meta_task[meta_task["SUBJECT_ID"]==subject][task_name].values[0]
+                        sex = meta_task[meta_task["SUBJECT_ID"]==subject]["sex"].values[0]
+                        final_dict[subject]=[sex,target]
+
+            elif self.hparams.decoder == 'series_decoder':
+                if self.hparams.downstream_task == 'emotions': task_name = emotions
+                elif self.hparams.downstream_task == 'contents': task_name = contents
+                elif self.hparams.downstream_task == 'features': task_name = features
+                else: raise ValueError('downstream task not supported')
+                
+                if self.hparams.downstream_task_type == 'regression':
+                    task_name = [x + "_smooth_conv" for x in task_name]
+                elif self.hparams.downstream_task_type == 'classification':
+                    task_name = [x + "_smooth_conv_mean_binary" for x in task_name]
+                else:
+                    raise ValueError('downstream task type not supported')
+                
+                meta_data = pd.read_csv("/data/HBN/0_meta/movieDM_s-auto_final_merged_result_250115.csv") # TODO change later
+                meta_task = meta_data[task_name + ['frame']].dropna()
+
+                for subject in os.listdir(img_root):
+                        sex = 1 # arbitrary value, not used
+                        target = meta_task[task_name].values
+                        target = target[np.argsort(meta_task['frame'].values)]
+                        final_dict[subject] = (sex, target)
         
         return final_dict
 
@@ -98,6 +143,7 @@ class fMRIDataModule(pl.LightningDataModule):
                 "shuffle_time_sequence": self.hparams.shuffle_time_sequence,
                 "input_type": self.hparams.input_type,
                 "label_scaling_method" : self.hparams.label_scaling_method,
+                "decoder": self.hparams.decoder,
                 "dtype":'float16'}
         
         subject_dict = self.make_subject_dict()

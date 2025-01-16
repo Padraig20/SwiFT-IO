@@ -240,7 +240,7 @@ class LitClassifier(pl.LightningModule):
 
         # regression target is normalized
         elif self.hparams.downstream_task_type == 'regression':
-            subj_avg_logits = subj_avg_logits.squeeze()
+            subj_avg_logits = subj_avg_logits.squeeze(-1)
             mse = F.mse_loss(subj_avg_logits, subj_targets)
             mae = F.l1_loss(subj_avg_logits, subj_targets)
             
