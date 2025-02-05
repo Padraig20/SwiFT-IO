@@ -73,9 +73,9 @@ class HBN(BaseDataset):
 
     def _set_data(self, root, subject_dict):
         if self.adjust_hrf:
-            start_TR = 7
+            start_TR = 0 # kimbo change
         else:
-            start_TR = 0
+            start_TR = 6 # kimbo change
         data = []
         
         img_root = os.path.join(root, 'img') 

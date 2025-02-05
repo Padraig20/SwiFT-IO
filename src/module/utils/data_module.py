@@ -110,14 +110,16 @@ class fMRIDataModule(pl.LightningDataModule):
                 elif self.hparams.downstream_task == 'features': task_name = features
                 else: raise ValueError('downstream task not supported')
                 
-                if self.hparams.downstream_task_type == 'regression':
-                    task_name = [x + "_smooth_conv" for x in task_name]
-                elif self.hparams.downstream_task_type == 'classification':
-                    task_name = [x + "_smooth_conv_mean_binary" for x in task_name]
+                if self.hparams.downstream_task_type == 'regression' and self.hparams.adjust_hrf == True: # kimbo change
+                    task_name = [x + "_conv" for x in task_name]  # kimbo change
+                elif self.hparams.downstream_task_type == 'regression' and self.hparams.adjust_hrf == False:  # kimbo change
+                    task_name = [x for x in task_name]  # kimbo change
+                elif self.hparams.downstream_task_type == 'classification':  # kimbo change
+                    task_name = [x + "_conv_mean_binary" for x in task_name]  # kimbo change
                 else:
                     raise ValueError('downstream task type not supported')
                 
-                meta_data = pd.read_csv("/data/HBN/0_meta/movieDM_s-auto_final_merged_result_250115.csv") # TODO change later
+                meta_data = pd.read_csv("/data/scratch/kimbo/HBN_preproc/250115/DespicableMe_summary_codes_1.2Hz_intuitivenames_260120.csv") # TODO change later
                 meta_task = meta_data[task_name + ['frame']].dropna()
 
                 for subject in os.listdir(img_root):
