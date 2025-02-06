@@ -12,6 +12,9 @@ from pytorch_lightning.loggers.tensorboard import TensorBoardLogger
 import neptune.new as neptune
 from module.utils.data_module import fMRIDataModule
 from module.pl_classifier import LitClassifier
+import wandb
+from pytorch_lightning.loggers.wandb import WandbLogger
+
 
 def cli_main():
 
@@ -31,6 +34,8 @@ def cli_main():
     parser.add_argument("--grad_clip", action='store_true', help="whether to use scheduler")
     
     parser.add_argument("--save_encoder", type=str, default=None, help="Path to save the SwiFT encoder after training, if wanted")
+    parser.add_argument("--experiment_name", default=None, type=str, help="A name of the experiment (WandB)") # kimbo change
+
     
     temp_args, _ = parser.parse_known_args()
 
@@ -91,6 +96,24 @@ def cli_main():
 
         logger = NeptuneLogger(run=run, log_model_checkpoints=False)
         dirpath = os.path.join(args.default_root_dir, logger.version)
+
+    elif args.loggername == "wandb":
+        API_KEY = os.environ.get("WANDB_API_KEY")
+        wandb.login(key=API_KEY)  # W&B 로그인 (생략 가능)
+
+        # W&B Logger 설정
+        logger = WandbLogger(
+            project=args.project_name,
+            name=args.experiment_name if hasattr(args, "experiment_name") else None,
+            config=vars(args),
+            save_dir=args.default_root_dir  # 로그 저장 경로 설정
+        )
+
+        if exp_id is None:
+            setattr(args, "id", logger.experiment.id)  # W&B Experiment ID 저장
+        print(f"default_root_dir: {args.default_root_dir}") # output/moviefmri
+        dirpath = os.path.join(args.default_root_dir, logger.version)
+
     else:
         raise Exception("Wrong logger name.")
 
@@ -168,6 +191,11 @@ def cli_main():
     
     if args.save_encoder:
         model.save_encoder(args.save_encoder)
+
+    # ✅ WandB 세션 종료
+    if args.loggername == "wandb":
+        wandb.finish()
+
 
 
 if __name__ == "__main__":

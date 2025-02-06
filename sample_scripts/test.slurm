@@ -1,21 +1,26 @@
 #!/bin/bash
-#SBATCH -N 1 # number of nodes
-#SBATCH -A m4727_g # project to charge for this job
-#SBATCH -q regular # quality of service (regular, debug, ...)
-#SBATCH -J HBN_emotion # name of job
-#SBATCH -t 15:00:00 # max walltime
-#SBATCH --ntasks-per-node=1
-#SBATCH -c 32
-#SBATCH --gpus-per-task=1
-#SBATCH --gpu-bind=none
+#SBATCH -N 1                       # 노드 1개 요청
+#SBATCH -c 8                      # CPU 코어 32개 요청 (GPU당 8개 코어 기준)
+#SBATCH --ntasks-per-node=1      # 노드당 2개의 task
+#SBATCH --gpus-per-node=1          # 노드당 GPU 2개 요청
+#SBATCH --mem-per-cpu=8G 
+#SBATCH --chdir='/data/scratch/kimbo/SwiFT-BERT-kimbo/SwiFT-BERT'
+#SBATCH --nodelist=gpu-1
+#SBATCH --output=/data/scratch/kimbo/SwiFT-IO/logs/R-%j-%x.out
+#SBATCH --error=/data/scratch/kimbo/SwiFT-IO/logs/R-%j-%x.out
+#SBATCH -t 10:00:00
+
+
+echo "GPUs for this job: $SLURM_JOB_GPUS"
+echo "GPUs allocated: $SLURM_GPUS_PER_NODE"
+echo "Tasks allocated: $SLURM_NTASKSs"
+echo "CPUs allocated: $SLURM_CPUS_ON_NODE"
 
 cd /data/scratch/kimbo/SwiFT-IO # move to where 'SwiFT is located'
 # conda init
 # source /usr/anaconda3/etc/profile.d/conda.sh
 conda activate /data/scratch/kimbo/.conda/myenv 
-#conda init # doesnt work anyways
-#conda activate SwiFT-BERT # make sure it's activated before already
- 
+
 TRAINER_ARGS='--accelerator gpu --max_epochs 10 --precision 16 --num_nodes 1 --devices 1 --strategy DDP' # specify the number of gpus as '--devices'
 MAIN_ARGS='--loggername neptune --dataset_name HBN --image_path /data/HBN/3.3.1.movieDM_MNI_to_TRs_smooth_znorm_241120'
 DATA_ARGS='--batch_size 8 --eval_batch_size 8 --num_workers 8 --input_type rest'
