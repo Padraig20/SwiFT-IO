@@ -21,14 +21,46 @@ from .utils.lr_scheduler import CosineAnnealingWarmUpRestarts
 from einops import rearrange
 
 from sklearn.preprocessing import StandardScaler, MinMaxScaler
+import wandb 
+import copy
 
 class LitClassifier(pl.LightningModule):
     
     def __init__(self,data_module, **kwargs):
         super().__init__()
-        # self.save_hyperparameters(kwargs) # save hyperparameters except data_module (data_module cannot be pickled as a checkpoint)
-        # self.data_module = data_module
-        hparams = {k: v for k, v in kwargs.items() if k != "data_module"}
+        self.data_module = data_module  # Pickle 불가능한 객체는 직접 저장
+
+        # ✅ 1. Pickle 불가능한 객체 필터링 함수
+        def is_pickleable(v):
+            try:
+                copy.deepcopy(v)  # Pickle 가능 여부 테스트
+                return True
+            except Exception:
+                return False
+
+        # ✅ 2. `data_module`과 None 값 제거
+        hparams = {k: v for k, v in kwargs.items() if k != "data_module" and v is not None}
+
+        # ✅ 3. wandb 같은 Pickle 불가능한 객체 제거
+        hparams = {k: v for k, v in hparams.items() if not isinstance(v, wandb.sdk.wandb_run.Run)}
+
+        # ✅ 4. `id` 필드 문자열 변환 (Pickle 가능하게 처리)
+        if "id" in hparams:
+            hparams["id"] = str(hparams["id"])  # Pickle 가능하도록 변환
+
+        # ✅ 5. DDP 환경에서만 Pickle 검증 수행
+        if torch.cuda.device_count() > 1:
+            remove_keys = []  # Pickle 불가능한 값들을 저장할 리스트
+            for k, v in hparams.items():
+                if not is_pickleable(v):
+                    print(f"❌ Pickle 불가능한 값 (DDP에서 오류 가능): {k} -> {type(v)} 제거됨")
+                    remove_keys.append(k)  # 삭제할 키 저장
+
+            # ✅ 한꺼번에 삭제 (딕셔너리 변경 중 반복 방지)
+            for k in remove_keys:
+                del hparams[k]
+
+        # ✅ 6. 안전한 값만 `save_hyperparameters()`에 전달
         self.save_hyperparameters(hparams)
 
         # you should define target_values at the Dataset classes
