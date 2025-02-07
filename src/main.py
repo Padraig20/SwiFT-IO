@@ -112,7 +112,9 @@ def cli_main():
         if exp_id is None:
             setattr(args, "id", logger.experiment.id)  # W&B Experiment ID 저장
         print(f"default_root_dir: {args.default_root_dir}") # output/moviefmri
-        dirpath = os.path.join(args.default_root_dir, logger.version)
+        # dirpath = os.path.join(args.default_root_dir, logger.version)
+        dirpath = os.path.join(args.default_root_dir, str(logger.version) if logger.version is not None else "default_version")
+
 
     else:
         raise Exception("Wrong logger name.")

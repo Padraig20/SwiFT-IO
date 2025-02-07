@@ -4,7 +4,7 @@
 #SBATCH --ntasks-per-node=1      # 노드당 2개의 task
 #SBATCH --gpus-per-node=1          # 노드당 GPU 2개 요청
 #SBATCH --mem-per-cpu=8G 
-#SBATCH --chdir='/data/scratch/kimbo/SwiFT-BERT-kimbo/SwiFT-BERT'
+#SBATCH --chdir='/data/scratch/kimbo/SwiFT-IO'
 #SBATCH --nodelist=gpu-1
 #SBATCH --output=/data/scratch/kimbo/SwiFT-IO/logs/R-%j-%x.out
 #SBATCH --error=/data/scratch/kimbo/SwiFT-IO/logs/R-%j-%x.out
