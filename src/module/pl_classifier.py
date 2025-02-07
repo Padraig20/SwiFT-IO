@@ -26,8 +26,11 @@ class LitClassifier(pl.LightningModule):
     
     def __init__(self,data_module, **kwargs):
         super().__init__()
-        self.save_hyperparameters(kwargs) # save hyperparameters except data_module (data_module cannot be pickled as a checkpoint)
-       
+        # self.save_hyperparameters(kwargs) # save hyperparameters except data_module (data_module cannot be pickled as a checkpoint)
+        # self.data_module = data_module
+        hparams = {k: v for k, v in kwargs.items() if k != "data_module"}
+        self.save_hyperparameters(hparams)
+
         # you should define target_values at the Dataset classes
         target_values = data_module.train_dataset.target_values
         if self.hparams.label_scaling_method == 'standardization':
