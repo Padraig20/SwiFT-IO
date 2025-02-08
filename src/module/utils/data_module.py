@@ -5,6 +5,7 @@ import pandas as pd
 from torch.utils.data import DataLoader
 from .datasets import Dummy, HBN
 from argparse import ArgumentParser, ArgumentDefaultsHelpFormatter
+from tqdm import tqdm
 
 class fMRIDataModule(pl.LightningDataModule):
     def __init__(self, **kwargs):
@@ -86,6 +87,7 @@ class fMRIDataModule(pl.LightningDataModule):
             emotions = ['Anger', 'Happy', 'Fear', 'Sad', 'Excited', 'Positive', 'Negative']
             contents = ['Closeup', 'Body', 'Face', 'NumberCharacters', 'SpokenWords', 'WrittenWords']
             features = ['Brightness', 'SaliencyFraction', 'Sharpness', 'Vibrance', 'Loudness', 'Motion', 'Tempo', 'LowLevelChange']
+            deepmreye_dir = "/data/scratch/patrickstyll/targets_DM" # TODO change later
 
             if self.hparams.decoder == 'single_target_decoder':
                 if self.hparams.downstream_task == 'sex': task_name = 'sex'
@@ -108,23 +110,32 @@ class fMRIDataModule(pl.LightningDataModule):
                 if self.hparams.downstream_task == 'emotions': task_name = emotions
                 elif self.hparams.downstream_task == 'contents': task_name = contents
                 elif self.hparams.downstream_task == 'features': task_name = features
+                elif self.hparams.downstream_task == 'deepmreye': task_name = 'deepmreye'
                 else: raise ValueError('downstream task not supported')
                 
-                if self.hparams.downstream_task_type == 'regression':
-                    task_name = [x + "_smooth_conv" for x in task_name]
-                elif self.hparams.downstream_task_type == 'classification':
-                    task_name = [x + "_smooth_conv_mean_binary" for x in task_name]
-                else:
-                    raise ValueError('downstream task type not supported')
-                
-                meta_data = pd.read_csv("/data/HBN/0_meta/movieDM_s-auto_final_merged_result_250115.csv") # TODO change later
-                meta_task = meta_data[task_name + ['frame']].dropna()
-
-                for subject in os.listdir(img_root):
+                if self.hparams.downstream_task == 'deepmreye':
+                    for subject in tqdm(os.listdir(deepmreye_dir), desc="Loading metadata"):
                         sex = 1 # arbitrary value, not used
-                        target = meta_task[task_name].values
-                        target = target[np.argsort(meta_task['frame'].values)]
-                        final_dict[subject] = (sex, target)
+                        metadata = pd.read_excel(f"{deepmreye_dir}/{subject}")
+                        target = metadata.drop(columns=["frame"]).dropna().values
+                        target = target[np.argsort(metadata['frame'].values)]
+                        final_dict[subject[:16]] = (sex, target)
+                else:
+                    if self.hparams.downstream_task_type == 'regression':
+                        task_name = [x + "_smooth_conv" for x in task_name]
+                    elif self.hparams.downstream_task_type == 'classification':
+                        task_name = [x + "_smooth_conv_mean_binary" for x in task_name]
+                    else:
+                        raise ValueError('downstream task type not supported')
+                
+                    meta_data = pd.read_csv("/data/HBN/0_meta/movieDM_s-auto_final_merged_result_250115.csv") # TODO change later
+                    meta_task = meta_data[task_name + ['frame']].dropna()
+
+                    for subject in os.listdir(img_root):
+                            sex = 1 # arbitrary value, not used
+                            target = meta_task[task_name].values
+                            target = target[np.argsort(meta_task['frame'].values)]
+                            final_dict[subject] = (sex, target)
         
         return final_dict
 
