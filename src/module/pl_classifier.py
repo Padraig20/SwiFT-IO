@@ -177,14 +177,18 @@ class LitClassifier(pl.LightningModule):
             else:
                 subj_avg_logits.append(torch.mean(torch.stack(subj_logits), dim=0))
             subj_targets.append([total_out[i][1] for i in range(len(subj_array)) if subj_array[i] == subj][0])
-    
-        if self.hparams.decoder == 'series_decoder' or self.hparams.decoder == 'multi_target_decoder':
+
+        if self.hparams.decoder == 'series_decoder':
             subj_avg_logits = [i[0] for i in subj_avg_logits] # unpack single values from the list
             subj_avg_logits = torch.stack(subj_avg_logits)
             subj_targets = torch.stack(subj_targets)
         else:
             subj_avg_logits = torch.stack(subj_avg_logits)
-            subj_targets = torch.tensor(subj_targets)
+
+            if self.hparams.decoder == 'multi_target_decoder':
+                subj_targets = torch.stack(subj_targets)
+            else:
+                subj_targets = torch.tensor(subj_targets)
     
         if self.hparams.downstream_task_type == 'classification':
             
@@ -322,7 +326,7 @@ class LitClassifier(pl.LightningModule):
         returning subject IDs and corresponding predictions for evaluation.
         """
         subj, logits, target = self._compute_logits(batch) #(b, num_classes)
-        if self.hparams.decoder == 'series_decoder': # (batch, T, E) -> (batch, T*E)
+        if self.hparams.decoder == 'series_decoder' or self.hparams.decoder == 'multi_target_decoder': # (batch, T, E) -> (batch, T*E)
             output = [(logit.cpu().detach(), targets.cpu()) for logit, targets in zip(logits, target)] # target is not single value, item() cannot be invoked
         else:
             output = [(logit.cpu().detach(), targets.cpu().item()) for logit, targets in zip(logits, target)]
@@ -410,7 +414,7 @@ class LitClassifier(pl.LightningModule):
         returning subject IDs and corresponding predictions for evaluation.
         """
         subj, logits, target = self._compute_logits(batch) #(b, num_classes)
-        if self.hparams.decoder == 'series_decoder': # (batch, T, E) -> (batch, T*E)
+        if self.hparams.decoder == 'series_decoder' or self.hparams.decoder == 'multi_target_decoder': # (batch, T, E) -> (batch, T*E)
             output = [(logit.cpu().detach(), targets.cpu()) for logit, targets in zip(logits, target)] # target is not single value, item() cannot be invoked
         else:
             output = [(logit.cpu().detach(), targets.cpu().item()) for logit, targets in zip(logits, target)]
