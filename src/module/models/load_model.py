@@ -1,5 +1,6 @@
 from .encoder.swin4d_transformer_ver7 import SwinTransformer4D
 from .decoder.single_target_decoder import SingleTargetDecoder
+from .decoder.multi_target_decoder import MultiTargetDecoder
 from .decoder.series_decoder import SeriesDecoder
 
 def load_model(model_name, hparams=None):
@@ -56,6 +57,26 @@ def load_model(model_name, hparams=None):
             #num_output_queries=hparams.num_output_queries,
             #num_output_query_channels=hparams.num_output_query_channels,
             num_classes=num_classes
+        )
+    elif model_name == "multi_target_decoder": # TODO add hparams?
+        num_classes = 1 if hparams.downstream_task_type == 'regression' else hparams.num_classes
+        net = MultiTargetDecoder(
+            num_latents=embed_dim,
+            num_latent_channels=dims, # TODO: verify this
+            #activation_checkpointing=hparams.activation_checkpointing,
+            #activation_offloading=hparams.activation_offloading,
+            #num_cross_attention_heads=hparams.num_cross_attention_heads,
+            #num_cross_attention_qk_channels=hparams.num_cross_attention_qk_channels,
+            #num_cross_attention_v_channels=hparams.num_cross_attention_v_channels,
+            #cross_attention_widening_factor=hparams.cross_attention_widening_factor,
+            #cross_attention_residual=hparams.cross_attention_residual,
+            #dropout=hparams.dropout,
+            #init_scale=hparams.init_scale,
+            #freeze=hparams.freeze,
+            #num_output_queries=hparams.num_output_queries,
+            #num_output_query_channels=hparams.num_output_query_channels,
+            num_classes=num_classes,
+            num_targets=hparams.num_targets
         )
     elif model_name == "series_decoder":
         num_classes = 1 if hparams.downstream_task_type == 'regression' else hparams.num_classes

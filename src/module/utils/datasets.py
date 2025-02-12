@@ -174,9 +174,13 @@ class Dummy(BaseDataset):
         #target = torch.randn(20, num_targets)
         
         # series decoder classification
-        num_targets = 7
+        #num_targets = 7
+        #num_classes = 2
+        #target = torch.randint(0,num_classes,(20,num_targets)).float()
+        
+        num_targets = 30
         num_classes = 2
-        target = torch.randint(0,num_classes,(20,num_targets)).float()
+        target = torch.randint(0,num_classes,(num_targets,)).float()
         
         return {
                 "fmri_sequence": y,

@@ -105,8 +105,8 @@ class LitClassifier(pl.LightningModule):
 
         # Classification task
         if self.hparams.downstream_task_type == 'classification':
-            logits = self.output_head(feature).squeeze() # (b,num_classes)  /  (b,t,num_targets,num_classes)
-            target = target_value.float().squeeze()      # (b,num_classes)  /  (b,t,num_targets,num_classes)
+            logits = self.output_head(feature).squeeze() # (b,num_classes)  /  (b,num_targets,num_classes)  /  (b,t,num_targets,num_classes)
+            target = target_value.float().squeeze()      # (b,num_classes)  /  (b,num_targets,num_classes)  /  (b,t,num_targets,num_classes)
             if self.hparams.decoder == 'series_decoder':
                 logits = rearrange(logits, 'b t ta c -> b (t ta) c')
                 target = rearrange(target, 'b t ta -> b (t ta)')
@@ -138,6 +138,10 @@ class LitClassifier(pl.LightningModule):
             if self.hparams.decoder == 'series_decoder': # [b, (t ta), c] -> [(b t ta), c]
                 logits = rearrange(logits, 'b tta c -> (b tta) c')
                 target = target.flatten() # (b,c) -> (b*c)
+            elif self.hparams.decoder == 'multi_target_decoder': # [b, ta, c] -> [(b ta), c]
+                logits = rearrange(logits, 'b ta c -> (b ta) c')
+                target = target.flatten() # (b,c) -> (b*c)
+                
             loss = F.cross_entropy(logits, target.long()) # target is float
             acc = self.metric.get_accuracy(logits, target.float().squeeze())
             result_dict = {
@@ -163,6 +167,7 @@ class LitClassifier(pl.LightningModule):
         """
         subjects = np.unique(subj_array)
         
+        # TODO calculate average for each subject for multi label decoder
         subj_avg_logits = []
         subj_targets = []
         for subj in subjects:
@@ -173,7 +178,7 @@ class LitClassifier(pl.LightningModule):
                 subj_avg_logits.append(torch.mean(torch.stack(subj_logits), dim=0))
             subj_targets.append([total_out[i][1] for i in range(len(subj_array)) if subj_array[i] == subj][0])
     
-        if self.hparams.decoder == 'series_decoder':
+        if self.hparams.decoder == 'series_decoder' or self.hparams.decoder == 'multi_target_decoder':
             subj_avg_logits = [i[0] for i in subj_avg_logits] # unpack single values from the list
             subj_avg_logits = torch.stack(subj_avg_logits)
             subj_targets = torch.stack(subj_targets)
@@ -185,6 +190,9 @@ class LitClassifier(pl.LightningModule):
             
             if self.hparams.decoder == 'series_decoder':
                 subj_avg_logits = rearrange(subj_avg_logits, 'b tta c -> (b tta) c')
+                subj_targets = subj_targets.flatten()
+            elif self.hparams.decoder == 'multi_target_decoder':
+                subj_avg_logits = rearrange(subj_avg_logits, 'b ta c -> (b ta) c')
                 subj_targets = subj_targets.flatten()
                 
             num_classes = subj_avg_logits.shape[1]
