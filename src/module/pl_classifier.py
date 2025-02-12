@@ -216,17 +216,26 @@ class LitClassifier(pl.LightningModule):
                 targets_one_hot = label_binarize(targets_np, classes=np.arange(num_classes))
                 roc_auc = roc_auc_score(targets_one_hot, probabilities.cpu().detach().numpy(), multi_class='ovr')
 
-            if self.hparams.decoder == 'series_decoder':
-                
+            if self.hparams.decoder == 'series_decoder' or self.hparams.decoder == 'multi_target_decoder':
+ 
                 # evaluate multiple targets separately
                 t = self.hparams.img_size[3]
 
-                subj_avg_logits = rearrange(subj_avg_logits, '(b t ta) c -> b t ta c', t=t, ta=self.hparams.num_targets, c=self.hparams.num_classes)
-                subj_targets = rearrange(subj_targets, '(b t ta) -> b t ta', t=t, ta=self.hparams.num_targets)
+                if self.hparams.decoder == 'series_decoder':
+                    subj_avg_logits = rearrange(subj_avg_logits, '(b t ta) c -> b t ta c', t=t, ta=self.hparams.num_targets, c=self.hparams.num_classes)
+                    subj_targets = rearrange(subj_targets, '(b t ta) -> b t ta', t=t, ta=self.hparams.num_targets)
+                else:
+                    subj_avg_logits = rearrange(subj_avg_logits, '(b ta) c -> b ta c', ta=self.hparams.num_targets, c=self.hparams.num_classes)
+                    subj_targets = rearrange(subj_targets, '(b ta) -> b ta', ta=self.hparams.num_targets)
             
                 for i in range(self.hparams.num_targets):
-                    logits_group = subj_avg_logits[:,:,i]  # Shape: [batch_size, temporal_size, num_classes]
-                    target_group = subj_targets[..., i]
+
+                    if self.hparams.decoder == 'series_decoder':
+                        logits_group = subj_avg_logits[:,:,i]  # Shape: [batch_size, temporal_size, num_classes]
+                        target_group = subj_targets[..., i]    # Shape: [batch_size, num_classes]
+                    else:
+                        logits_group = subj_avg_logits[:,i]    # Shape: [batch_size, num_classes]
+                        target_group = subj_targets[..., i]    # Shape: [batch_size, num_classes]
                     
                     probabilities = F.softmax(logits_group.to(dtype=torch.float32), dim=-1) # (b, temporal_size, num_classes), require 32 bit precision
                     predictions = probabilities.argmax(dim=-1) # (b, temporal_size)
@@ -241,7 +250,12 @@ class LitClassifier(pl.LightningModule):
                         roc_auc_group = roc_auc_score(targets_np, predictions_np)
                     else: 
                         targets_one_hot = label_binarize(targets_np, classes=np.arange(num_classes))
-                        roc_auc_group = roc_auc_score(targets_one_hot, rearrange(probabilities, 'b t c -> (b t) c').cpu().detach().numpy(), multi_class='ovr')
+                        if self.hparams.decoder == 'series_decoder':
+                            subj_for_roc = rearrange(probabilities, 'b t c -> (b t) c').cpu().detach().numpy()
+                        else:
+                            subj_for_roc = probabilities.cpu().detach().numpy()
+
+                        roc_auc_group = roc_auc_score(targets_one_hot, subj_for_roc, multi_class='ovr')
                     
                     self.log(f"{mode}_acc_{i}", accuracy_group, sync_dist=True)
                     self.log(f"{mode}_balacc_{i}", balanced_accuracy_group, sync_dist=True)
@@ -267,20 +281,21 @@ class LitClassifier(pl.LightningModule):
             pearson = PearsonCorrCoef()
             r2_score = R2Score()
             
-            if self.hparams.decoder == 'series_decoder':
+            if self.hparams.decoder == 'series_decoder' or self.hparams.decoder == 'multi_target_decoder':
                 pearson_coef = pearson(subj_avg_logits.flatten(), subj_targets.flatten())
                 r2 = r2_score(subj_avg_logits.flatten(), subj_targets.flatten()) if len(subj_avg_logits) >=2 else 0
             else:
                 pearson_coef = pearson(subj_avg_logits, subj_targets)
                 r2 = r2_score(subj_avg_logits, subj_targets) if len(subj_avg_logits) >=2 else 0
             
-            if self.hparams.decoder == 'series_decoder':
+            if self.hparams.decoder == 'series_decoder' or self.hparams.decoder == 'multi_target_decoder':
                 
                 # evaluate multiple targets separately
                 t = self.hparams.img_size[3]
-            
-                subj_avg_logits = subj_avg_logits.view(-1, t ,self.hparams.num_targets) # (b, t*num_targets) -> (b, t, num_targets)
-                subj_targets = subj_targets.view(-1, t ,self.hparams.num_targets) # (b, t*num_targets) -> (b, t, num_targets)
+
+                if self.hparams.decoder == 'series_decoder':
+                    subj_avg_logits = subj_avg_logits.view(-1, t ,self.hparams.num_targets) # (b, t*num_targets) -> (b, t, num_targets)
+                    subj_targets = subj_targets.view(-1, t ,self.hparams.num_targets) # (b, t*num_targets) -> (b, t, num_targets)
             
                 for i in range(self.hparams.num_targets):
                     logits_group = subj_avg_logits[..., i]  # Shape: [batch_size, temporal_size]
