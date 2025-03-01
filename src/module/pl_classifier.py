@@ -216,7 +216,7 @@ class LitClassifier(pl.LightningModule):
                 targets_one_hot = label_binarize(targets_np, classes=np.arange(num_classes))
                 roc_auc = roc_auc_score(targets_one_hot, probabilities.cpu().detach().numpy(), multi_class='ovr')
 
-            if self.hparams.decoder == 'series_decoder' or self.hparams.decoder == 'multi_target_decoder':
+            if self.hparams.decoder == 'series_decoder' or self.hparams.decoder == 'multi_target_decoder' and self.hparams.num_targets > 1:
  
                 # evaluate multiple targets separately
                 t = self.hparams.img_size[3]
@@ -288,7 +288,7 @@ class LitClassifier(pl.LightningModule):
                 pearson_coef = pearson(subj_avg_logits, subj_targets)
                 r2 = r2_score(subj_avg_logits, subj_targets) if len(subj_avg_logits) >=2 else 0
             
-            if self.hparams.decoder == 'series_decoder' or self.hparams.decoder == 'multi_target_decoder':
+            if self.hparams.decoder == 'series_decoder' or self.hparams.decoder == 'multi_target_decoder' and self.hparams.num_targets > 1:
                 
                 # evaluate multiple targets separately
                 t = self.hparams.img_size[3]
