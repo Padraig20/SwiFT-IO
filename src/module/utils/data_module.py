@@ -111,6 +111,13 @@ class fMRIDataModule(pl.LightningDataModule):
                 elif self.hparams.downstream_task == 'contents': task_name = contents
                 elif self.hparams.downstream_task == 'features': task_name = features
                 elif self.hparams.downstream_task == 'deepmreye': task_name = 'deepmreye'
+                elif self.hparams.downstream_task == 'anger': task_name = ['Anger']
+                elif self.hparams.downstream_task == 'happy': task_name = ['Happy']
+                elif self.hparams.downstream_task == 'fear': task_name = ['Fear']
+                elif self.hparams.downstream_task == 'sad': task_name = ['Sad']
+                elif self.hparams.downstream_task == 'excited': task_name = ['Excited']
+                elif self.hparams.downstream_task == 'positive': task_name = ['Positive']
+                elif self.hparams.downstream_task == 'negative': task_name = ['Negative']
                 else: raise ValueError('downstream task not supported')
                 
                 if self.hparams.downstream_task == 'deepmreye':
