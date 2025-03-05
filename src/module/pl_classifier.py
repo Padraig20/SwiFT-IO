@@ -23,7 +23,7 @@ from einops import rearrange
 from sklearn.preprocessing import StandardScaler, MinMaxScaler
 import wandb 
 import copy
-
+import pdb
 class LitClassifier(pl.LightningModule):
     
     def __init__(self,data_module, **kwargs):
@@ -81,6 +81,8 @@ class LitClassifier(pl.LightningModule):
 
         self.metric = Metrics()
 
+        self.valid_only = kwargs.get("valid_only", False) # kimbo change
+
     def forward(self, x):
         x = self.model(x)
         return self.output_head(x)
@@ -126,7 +128,7 @@ class LitClassifier(pl.LightningModule):
 
         return img
     
-    def _compute_logits(self, batch, augment_during_training=None):
+    def _compute_logits(self, batch, augment_during_training=None, mode=None):
         """
         Processes a batch of data to compute logits for either classification or regression tasks. 
         Applies optional augmentation during training and handles label scaling for regression tasks.
@@ -134,7 +136,8 @@ class LitClassifier(pl.LightningModule):
         fmri, subj, target_value, tr, sex = batch.values()
        
         if augment_during_training:
-            fmri = self.augment(fmri)
+            if mode == 'train': # kimbo change
+                fmri = self.augment(fmri)
 
         feature = self.model(fmri)
 
@@ -191,11 +194,12 @@ class LitClassifier(pl.LightningModule):
         self.log_dict(result_dict, prog_bar=True, sync_dist=False, add_dataloader_idx=False, on_step=True, on_epoch=True, batch_size=self.hparams.batch_size)
         return loss
 
-    def _evaluate_metrics(self, subj_array, total_out, mode):
+    def _evaluate_metrics(self, subj_array, total_out, mode, best=False):
         """
         Evaluates classification or regression metrics for aggregated subject-level predictions. 
         Logs accuracy, balanced accuracy, and AUROC for classification tasks, and MSE, MAE, and correlation coefficients for regression tasks, including metrics on the original scale.
         """
+        mode_str = mode if best == False else 'best_'+mode # kimbo change
         subjects = np.unique(subj_array)
         
         subj_avg_logits = []
@@ -266,13 +270,13 @@ class LitClassifier(pl.LightningModule):
                         targets_one_hot = label_binarize(targets_np, classes=np.arange(num_classes))
                         roc_auc_group = roc_auc_score(targets_one_hot, rearrange(probabilities, 'b t c -> (b t) c').cpu().detach().numpy(), multi_class='ovr')
                     
-                    self.log(f"{mode}_acc_{i}", accuracy_group, sync_dist=True)
-                    self.log(f"{mode}_balacc_{i}", balanced_accuracy_group, sync_dist=True)
-                    self.log(f"{mode}_AUROC_{i}", roc_auc_group, sync_dist=True)
+                    self.log(f"{mode_str}_acc_{i}", accuracy_group, sync_dist=True)
+                    self.log(f"{mode_str}_balacc_{i}", balanced_accuracy_group, sync_dist=True)
+                    self.log(f"{mode_str}_AUROC_{i}", roc_auc_group, sync_dist=True)
                 
-            self.log(f"{mode}_acc", accuracy, sync_dist=True)
-            self.log(f"{mode}_balacc", balanced_accuracy, sync_dist=True)
-            self.log(f"{mode}_AUROC", roc_auc, sync_dist=True)
+            self.log(f"{mode_str}_acc", accuracy, sync_dist=True)
+            self.log(f"{mode_str}_balacc", balanced_accuracy, sync_dist=True)
+            self.log(f"{mode_str}_AUROC", roc_auc, sync_dist=True)
 
         # regression target is normalized
         elif self.hparams.downstream_task_type == 'regression':
@@ -322,19 +326,19 @@ class LitClassifier(pl.LightningModule):
                         adjusted_mse_group = F.mse_loss(logits_group * (self.scaler.data_max_[0] - self.scaler.data_min_[0]) + self.scaler.data_min_[0], target_group * (self.scaler.data_max_[0] - self.scaler.data_min_[0]) + self.scaler.data_min_[0])
                         adjusted_mae_group = F.l1_loss(logits_group * (self.scaler.data_max_[0] - self.scaler.data_min_[0]) + self.scaler.data_min_[0], target_group * (self.scaler.data_max_[0] - self.scaler.data_min_[0]) + self.scaler.data_min_[0])
 
-                    self.log(f"{mode}_corrcoef_{i}", pearson_coef_group, sync_dist=True)
-                    self.log(f"{mode}_r2_score_{i}", r2_group, sync_dist=True)
-                    self.log(f"{mode}_mse_{i}", mse_group, sync_dist=True)
-                    self.log(f"{mode}_mae_{i}", mae_group, sync_dist=True)
-                    self.log(f"{mode}_adjusted_mse_{i}", adjusted_mse_group, sync_dist=True)
-                    self.log(f"{mode}_adjusted_mae_{i}", adjusted_mae_group, sync_dist=True)
+                    self.log(f"{mode_str}_corrcoef_{i}", pearson_coef_group, sync_dist=True)
+                    self.log(f"{mode_str}_r2_score_{i}", r2_group, sync_dist=True)
+                    self.log(f"{mode_str}_mse_{i}", mse_group, sync_dist=True)
+                    self.log(f"{mode_str}_mae_{i}", mae_group, sync_dist=True)
+                    self.log(f"{mode_str}_adjusted_mse_{i}", adjusted_mse_group, sync_dist=True)
+                    self.log(f"{mode_str}_adjusted_mae_{i}", adjusted_mae_group, sync_dist=True)
             
-            self.log(f"{mode}_corrcoef", pearson_coef, sync_dist=True)
-            self.log(f"{mode}_r2_score", r2, sync_dist=True)
-            self.log(f"{mode}_mse", mse, sync_dist=True)
-            self.log(f"{mode}_mae", mae, sync_dist=True)
-            self.log(f"{mode}_adjusted_mse", adjusted_mse, sync_dist=True) 
-            self.log(f"{mode}_adjusted_mae", adjusted_mae, sync_dist=True)
+            self.log(f"{mode_str}_corrcoef", pearson_coef, sync_dist=True)
+            self.log(f"{mode_str}_r2_score", r2, sync_dist=True)
+            self.log(f"{mode_str}_mse", mse, sync_dist=True)
+            self.log(f"{mode_str}_mae", mae, sync_dist=True)
+            self.log(f"{mode_str}_adjusted_mse", adjusted_mse, sync_dist=True) 
+            self.log(f"{mode_str}_adjusted_mae", adjusted_mae, sync_dist=True)
 
     def training_step(self, batch, batch_idx):
         """
@@ -360,6 +364,9 @@ class LitClassifier(pl.LightningModule):
         Aggregates and processes validation and test outputs at the end of an epoch. 
         Evaluates metrics for both datasets and optionally saves model predictions for future analysis.
         """
+        if self.valid_only: # kimbo change
+            outputs_valid = outputs  # outputs 자체가 validation 출력 리스트라 가정
+            outputs_test = []   
         outputs_valid = outputs[0]
         outputs_test = outputs[1]
         subj_valid = []
@@ -375,7 +382,9 @@ class LitClassifier(pl.LightningModule):
         subj_valid = np.array(subj_valid)
         subj_test = np.array(subj_test)
         total_out_valid = [item for sublist in out_valid_list for item in sublist]
-        total_out_test = [item for sublist in out_test_list for item in sublist]
+        if not self.valid_only:
+            total_out_test = [item for sublist in out_test_list for item in sublist]
+
 
         # save model predictions if it is needed for future analysis
         # self._save_predictions(subj_valid,total_out_valid,mode="valid")
@@ -383,7 +392,8 @@ class LitClassifier(pl.LightningModule):
                 
         # evaluate 
         self._evaluate_metrics(subj_valid, total_out_valid, mode="valid")
-        self._evaluate_metrics(subj_test, total_out_test, mode="test")
+        if self.hparams.valid_only == False:
+            self._evaluate_metrics(subj_test, total_out_test, mode="test")
             
     # If you use loggers other than Neptune you may need to modify this
     def _save_predictions(self,total_subjs,total_out, mode):
@@ -596,5 +606,5 @@ class LitClassifier(pl.LightningModule):
         group.add_argument("--num_classes", type=int, default=2, help="Number of distinct target classes")
         group.add_argument("--decoder", type=str, default="single_target_decoder", help="Which decoder to use: (i) single_target_decoder - predict a single value via regression or classification | (ii) series_decoder: predict a series of values (one per timeframe) via regression")
         group.add_argument("--num_targets", type=int, default=7, help="Number of targets to predict in series_decoder")
-        
+        # parser.add_argument("--valid_only", action='store_true', help="disable running _evaluate_metrics(mode='test') at validation stage") # kimbo change
         return parser

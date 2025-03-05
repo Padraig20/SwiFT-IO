@@ -35,7 +35,9 @@ def cli_main():
     
     parser.add_argument("--save_encoder", type=str, default=None, help="Path to save the SwiFT encoder after training, if wanted")
     parser.add_argument("--experiment_name", default=None, type=str, help="A name of the experiment (WandB)") # kimbo change
-
+    parser.add_argument("--valid_only", action='store_true', help="disable running _evaluate_metrics(mode='test') at validation stage") # kimbo change
+    parser.set_defaults(valid_only=False)  # kimbo change
+    # valid only > pl.classifier or dataloader에서 둘 다 불러올 수 있음. > self.trainer.hparams.
     
     temp_args, _ = parser.parse_known_args()
 
@@ -101,12 +103,23 @@ def cli_main():
         API_KEY = os.environ.get("WANDB_API_KEY")
         wandb.login(key=API_KEY)  # W&B 로그인 (생략 가능)
 
+        tags = [] # kimbo change
+        if args.experiment_name is not None:
+            tags.append(args.experiment_name)
+        if args.valid_only:
+            tags.append("valid_only")
+        if args.test_only:
+            tags.append("test_only")  # kimbo change
+        # run의 기타 특징들을 태그로 추가 가능
+        # tags.extend(["in_production", "preemptible", "baseline"])
+
         # W&B Logger 설정
         logger = WandbLogger(
             project=args.project_name,
             name=args.experiment_name if hasattr(args, "experiment_name") else None,
             config=vars(args),
-            save_dir=args.default_root_dir  # 로그 저장 경로 설정
+            save_dir=args.default_root_dir,  # 로그 저장 경로 설정
+            tags = tags
         )
 
         if exp_id is None:
@@ -189,7 +202,7 @@ def cli_main():
             # Resume existing run
             trainer.fit(model, datamodule=data_module, ckpt_path=args.resume_ckpt_path)
 
-        trainer.test(model, dataloaders=data_module)
+        trainer.test(model, dataloaders=data_module) # 여기서 Best ckpt를 가져와야함. 
     
     if args.save_encoder:
         model.save_encoder(args.save_encoder)
