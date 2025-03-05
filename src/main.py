@@ -5,7 +5,7 @@ import torch
 from collections import OrderedDict
 import pytorch_lightning as pl
 from pytorch_lightning.loggers.neptune import NeptuneLogger
-from pytorch_lightning.callbacks import ModelCheckpoint, LearningRateMonitor
+from pytorch_lightning.callbacks import ModelCheckpoint, LearningRateMonitor, EarlyStopping
 from pytorch_lightning.loggers.tensorboard import TensorBoardLogger
 
 # from module import LitClassifier
@@ -78,6 +78,15 @@ def cli_main():
         exp_id = None
     
     setattr(args, "default_root_dir", f"output/{args.project_name}")
+
+    # ------------ EarlyStopping 설정 -------------
+    early_stop_callback = EarlyStopping(
+        monitor='valid_loss',        # 모니터할 메트릭 (예: valid_loss, valid_acc)
+        patience=5,                  # 성능 향상이 없을 경우 학습을 멈출 때까지 기다릴 에포크 수
+        verbose=True,                # 진행 상태 출력 여부
+        mode='min',                  # 'min' (loss가 낮을수록 좋음) 또는 'max' (accuracy가 높을수록 좋음)
+        check_on_train_epoch_end=True  # train epoch가 끝날 때마다 체크
+    )
 
     # ------------ data -------------
     data_module = Dataset(**vars(args))
@@ -153,7 +162,7 @@ def cli_main():
         )
 
     lr_monitor = LearningRateMonitor(logging_interval="step")
-    callbacks = [checkpoint_callback, lr_monitor]
+    callbacks = [checkpoint_callback, lr_monitor, early_stop_callback] # kimbo change
 
     # ------------ trainer -------------
     if args.grad_clip:
