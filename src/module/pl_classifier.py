@@ -277,7 +277,7 @@ class LitClassifier(pl.LightningModule):
             self.log(f"{mode_str}_acc", accuracy, sync_dist=True)
             self.log(f"{mode_str}_balacc", balanced_accuracy, sync_dist=True)
             self.log(f"{mode_str}_AUROC", roc_auc, sync_dist=True)
-
+ 
         # regression target is normalized
         elif self.hparams.downstream_task_type == 'regression':
             subj_avg_logits = subj_avg_logits.squeeze(-1)
@@ -339,6 +339,7 @@ class LitClassifier(pl.LightningModule):
             self.log(f"{mode_str}_mae", mae, sync_dist=True)
             self.log(f"{mode_str}_adjusted_mse", adjusted_mse, sync_dist=True) 
             self.log(f"{mode_str}_adjusted_mae", adjusted_mae, sync_dist=True)
+
 
     def training_step(self, batch, batch_idx):
         """

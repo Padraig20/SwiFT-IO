@@ -16,6 +16,30 @@ import wandb
 from pytorch_lightning.loggers.wandb import WandbLogger
 
 
+import wandb
+from pytorch_lightning.callbacks import ModelCheckpoint
+
+class CustomModelCheckpoint(ModelCheckpoint):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+    def on_validation_epoch_end(self, trainer, pl_module):
+        # 검증 종료 후에 실행되는 부분
+        print(f"현재 epoch: {trainer.current_epoch}, best model path: {self.best_model_path}")
+        super().on_validation_epoch_end(trainer, pl_module)
+
+    def on_save_checkpoint(self, trainer, pl_module, checkpoint):
+        checkpoint_path = self.best_model_path  # 최고 성능 체크포인트 경로
+        print(f"Checkpoint path: {checkpoint_path}")
+        artifact = wandb.Artifact('best_model', type='model')
+        if os.path.isfile(checkpoint_path):
+            artifact.add_file(checkpoint_path)  # 체크포인트 파일 추가
+            wandb.log_artifact(artifact)  # 아티팩트로 로깅
+        else:
+            print(f"Checkpoint path is not a valid file: {checkpoint_path}")
+        return super().on_save_checkpoint(trainer, pl_module, checkpoint)
+    
+    
 def cli_main():
 
     # ------------ args -------------
@@ -79,20 +103,39 @@ def cli_main():
     
     setattr(args, "default_root_dir", f"output/{args.project_name}")
 
+    
     # ------------ EarlyStopping 설정 -------------
-    early_stop_callback = EarlyStopping(
-        monitor='valid_loss',        # 모니터할 메트릭 (예: valid_loss, valid_acc)
-        patience=5,                  # 성능 향상이 없을 경우 학습을 멈출 때까지 기다릴 에포크 수
-        verbose=True,                # 진행 상태 출력 여부
-        mode='min',                  # 'min' (loss가 낮을수록 좋음) 또는 'max' (accuracy가 높을수록 좋음)
-        check_on_train_epoch_end=True  # train epoch가 끝날 때마다 체크
-    )
+    if args.downstream_task_type == "classification":
+        early_stop_callback = EarlyStopping(
+            monitor='valid_acc',        # 모니터할 메트릭 (예: valid_loss, valid_acc)
+            patience=20,                  # 성능 향상이 없을 경우 학습을 멈출 때까지 기다릴 에포크 수
+            verbose=True,                # 진행 상태 출력 여부
+            mode='max',                  # 'min' (loss가 낮을수록 좋음) 또는 'max' (accuracy가 높을수록 좋음)
+            check_on_train_epoch_end=True  # train epoch가 끝날 때마다 체크
+        )
+
+    if args.downstream_task_type == "regression":
+        early_stop_callback = EarlyStopping(
+            monitor='valid_mse',        # 모니터할 메트릭 (예: valid_loss, valid_acc)
+            patience=20,                  # 성능 향상이 없을 경우 학습을 멈출 때까지 기다릴 에포크 수
+            verbose=True,                # 진행 상태 출력 여부
+            mode='min',                  # 'min' (loss가 낮을수록 좋음) 또는 'max' (accuracy가 높을수록 좋음)
+            check_on_train_epoch_end=True  # train epoch가 끝날 때마다 체크
+        )
 
     # ------------ data -------------
     data_module = Dataset(**vars(args))
     pl.seed_everything(args.seed)
     
+    
+
     # ------------ logger -------------
+    # log_every_n_steps = int(data_module.test_loader.dataset.total_len / (args.batch_size * int(num_nodes) * int(devices))) - 1
+    # log_every_n_steps = 1 if log_every_n_steps == 0 else log_every_n_steps
+    # log_every_n_steps = 50 if log_every_n_steps > 50 else log_every_n_steps
+    # print("log_every_n_steps:",log_every_n_steps)
+
+
     if args.loggername == "tensorboard":
         # logger = True  # tensor board is a default logger of Trainer class
         dirpath = args.default_root_dir
@@ -144,7 +187,7 @@ def cli_main():
     # ------------ callbacks -------------
     # callback for classification task
     if args.downstream_task_type == "classification":
-        checkpoint_callback = ModelCheckpoint(
+        checkpoint_callback = CustomModelCheckpoint(
             dirpath=dirpath,
             monitor="valid_acc",
             filename="checkpt-{epoch:02d}-{valid_acc:.2f}",
@@ -153,7 +196,7 @@ def cli_main():
         )
     # callback for regression task
     else:
-        checkpoint_callback = ModelCheckpoint(
+        checkpoint_callback = CustomModelCheckpoint(
             dirpath=dirpath,
             monitor="valid_mse",
             filename="checkpt-{epoch:02d}-{valid_mse:.2f}",
