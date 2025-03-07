@@ -31,9 +31,21 @@ class CustomModelCheckpoint(ModelCheckpoint):
     def on_save_checkpoint(self, trainer, pl_module, checkpoint):
         checkpoint_path = self.best_model_path  # 최고 성능 체크포인트 경로
         print(f"Checkpoint path: {checkpoint_path}")
+        
+        # Best performance metric (valid_acc or valid_mse)
+        best_metric = trainer.callback_metrics.get('valid_acc') if 'valid_acc' in trainer.callback_metrics else trainer.callback_metrics.get('valid_mse')
+        
         artifact = wandb.Artifact('best_model', type='model')
+
         if os.path.isfile(checkpoint_path):
             artifact.add_file(checkpoint_path)  # 체크포인트 파일 추가
+
+            # Add metadata with performance metrics
+            artifact.metadata = {
+                'valid_acc': best_metric,  # valid_acc or valid_mse depending on task
+                'epoch': trainer.current_epoch
+            }
+
             wandb.log_artifact(artifact)  # 아티팩트로 로깅
         else:
             print(f"Checkpoint path is not a valid file: {checkpoint_path}")
@@ -61,7 +73,6 @@ def cli_main():
     parser.add_argument("--experiment_name", default=None, type=str, help="A name of the experiment (WandB)") # kimbo change
     parser.add_argument("--valid_only", action='store_true', help="disable running _evaluate_metrics(mode='test') at validation stage") # kimbo change
     parser.set_defaults(valid_only=False)  # kimbo change
-    # valid only > pl.classifier or dataloader에서 둘 다 불러올 수 있음. > self.trainer.hparams.
     
     temp_args, _ = parser.parse_known_args()
 

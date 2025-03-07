@@ -11,3 +11,7 @@ logs
 .neptune
 
 analysis
+
+src/artifacts
+
+src/wandb
