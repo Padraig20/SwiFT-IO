@@ -9,7 +9,7 @@ import torchio as tio
 import random
 import glob
 import re
-
+import pdb
 class BaseDataset(Dataset):
     def __init__(self, **kwargs):
         super().__init__()      
@@ -89,16 +89,23 @@ class HBN(BaseDataset):
             ])
             
             session_duration = num_frames - self.sample_duration + 1 - start_TR
-            
+            print('session_duration: ', session_duration)
+            pdb.set_trace()
             for start_frame in range(start_TR, session_duration, self.stride):
+                input_start_frame = start_frame + self.input_offset
+                output_start_frame = start_frame
+                if not (0 <= input_start_frame < num_frames):
+                    continue
+                print('input_start_frame: ', input_start_frame)
+                print('output_start_frame: ', output_start_frame)
                 if self.decoder == 'series_decoder':
                     data_tuple = (i,
                                 subject_name,
                                 subject_path,
-                                start_frame,
+                                input_start_frame,
                                 self.sample_duration,
                                 num_frames,
-                                target[start_frame:min(start_frame+self.sample_duration,num_frames)],
+                                target[output_start_frame:min(output_start_frame+self.sample_duration,num_frames)],
                                 sex)
                 elif self.decoder == 'single_target_decoder':
                     data_tuple = (i,

@@ -147,7 +147,8 @@ class fMRIDataModule(pl.LightningDataModule):
                 "label_scaling_method" : self.hparams.label_scaling_method,
                 "decoder": self.hparams.decoder,
                 "adjust_hrf": self.hparams.adjust_hrf,
-                "dtype":'float16'}
+                "dtype":'float16', 
+                "input_offset": self.hparams.input_offset} # kimbo change
         
         subject_dict = self.make_subject_dict()
         if os.path.exists(self.split_file_path):
@@ -233,5 +234,6 @@ class fMRIDataModule(pl.LightningDataModule):
         group.add_argument("--shuffle_time_sequence", action='store_true')
         group.add_argument("--limit_training_samples", type=int, default=None, help="use if you want to limit training samples")
         group.add_argument("--adjust_hrf", action='store_true', help="use for HRF effect adjustmenet. shifts start fMRI timeframe from 0TR to 7TR")
+        group.add_argument("--input_offset", default=0, type = int, help="Shifts the starting point of the fMRI input sequence") # kimbo change
 
         return parser
