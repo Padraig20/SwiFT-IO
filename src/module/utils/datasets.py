@@ -36,6 +36,9 @@ class BaseDataset(Dataset):
     
     def load_sequence(self, subject_path, start_frame, sample_duration, num_frames=None): 
         y = []
+        # if start_frame + self.sequence_length > 749: # kimbo change for DM: TODO: needs to change for movieTP
+        #     return None
+            
         if self.shuffle_time_sequence: # shuffle whole sequences
             load_fnames = [f'frame_{frame}.pt' for frame in random.sample(list(range(0,num_frames)),sample_duration//self.stride_within_seq)]
         else:
@@ -72,10 +75,10 @@ class HBN(BaseDataset):
         print(f"Number of unique subjects: {len(unique_subjects)}")
 
     def _set_data(self, root, subject_dict):
-        if self.adjust_hrf:
-            start_TR = 0 # kimbo change
-        else:
-            start_TR = 6 # kimbo change
+        # if self.adjust_hrf:
+        #     start_TR = 0 # kimbo change
+        # else:
+        #     start_TR = 6 # kimbo change
         data = []
         
         img_root = os.path.join(root, 'img') 
@@ -88,16 +91,16 @@ class HBN(BaseDataset):
                 if re.search(r'frame_\d+\.pt$', os.path.basename(f))
             ])
             
-            session_duration = num_frames - self.sample_duration + 1 - start_TR
-            print('session_duration: ', session_duration)
-            pdb.set_trace()
-            for start_frame in range(start_TR, session_duration, self.stride):
+            session_duration = num_frames - self.sample_duration + 1 #- start_TR: kimbo change
+            # pdb.set_trace()
+            start_frame_adjustment = 7 if not self.adjust_hrf else 0   # kimbo change: If HRF correction is not applied, shift the start frame by an additional 7 TRs
+            for start_frame in range(start_frame_adjustment, session_duration, self.stride):
+                if start_frame < 0:
+                        continue
                 input_start_frame = start_frame + self.input_offset
                 output_start_frame = start_frame
-                if not (0 <= input_start_frame < num_frames):
+                if not (0 <= input_start_frame < session_duration and 0 <= output_start_frame < session_duration):
                     continue
-                print('input_start_frame: ', input_start_frame)
-                print('output_start_frame: ', output_start_frame)
                 if self.decoder == 'series_decoder':
                     data_tuple = (i,
                                 subject_name,
@@ -129,7 +132,15 @@ class HBN(BaseDataset):
 
     def __getitem__(self, index):
         _, subject_name, subject_path, start_frame, sequence_length, num_frames, target, sex = self.data[index]
+
+        # input_offset 적용 후 범위 체크
+        input_start_frame = start_frame + self.input_offset
+        if not (0 <= input_start_frame < num_frames):  # 범위를 벗어나면 건너뛰기
+            return None
         y = self.load_sequence(subject_path, start_frame, sequence_length, num_frames)
+
+        if y is None: 
+            return None # 이후 코드가 실행되지 않음
 
         background_value = y.flatten()[0]
         y = y.permute(0,4,1,2,3) 
