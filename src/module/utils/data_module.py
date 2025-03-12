@@ -119,7 +119,7 @@ class fMRIDataModule(pl.LightningDataModule):
                 else:
                     raise ValueError('downstream task type not supported')
                 
-                meta_data = pd.read_csv("/data/scratch/kimbo/HBN_preproc/250115/DespicableMe_summary_codes_1.2Hz_intuitivenames_260120.csv") # TODO change later
+                meta_data = pd.read_csv("/pscratch/sd/k/kimbo/SwiFT-IO/metadata/DespicableMe_summary_codes_1.2Hz_intuitivenames_260120.csv") # TODO change later
                 meta_task = meta_data[task_name + ['frame']].dropna()
 
                 for subject in os.listdir(img_root):
