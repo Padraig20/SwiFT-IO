@@ -118,10 +118,11 @@ class fMRIDataModule(pl.LightningDataModule):
                     task_name = [x + "_conv_mean_binary" for x in task_name]  # kimbo change
                 else:
                     raise ValueError('downstream task type not supported')
-                
-                meta_data = pd.read_csv("/data/scratch/kimbo/HBN_preproc/250115/DespicableMe_summary_codes_1.2Hz_intuitivenames_260120.csv") # TODO change later
+                if self.hparams.input_type == 'movieDM': 
+                    meta_data = pd.read_csv("/data/scratch/kimbo/HBN_preproc/250115/DespicableMe_summary_codes_1.2Hz_intuitivenames_260120.csv") # TODO change later
+                elif self.hparams.input_type == 'movieTP': 
+                    meta_data = pd.read_csv('/data/scratch/kimbo/HBN_preproc/250115/ThePresent_summary_codes_1.2Hz_intuitivenames_260120.csv') # TODO change later
                 meta_task = meta_data[task_name + ['frame']].dropna()
-
                 for subject in os.listdir(img_root):
                         sex = 1 # arbitrary value, not used
                         target = meta_task[task_name].values
@@ -220,7 +221,7 @@ class fMRIDataModule(pl.LightningDataModule):
         group.add_argument("--label_scaling_method", default="standardization", choices=["minmax","standardization"], help="label normalization strategy for a regression task (mean and std are automatically calculated using train set)")
         group.add_argument("--image_path", default=None, help="path to image datasets preprocessed for SwiFT")
         group.add_argument("--bad_subj_path", default=None, help="path to txt file that contains subjects with bad fMRI quality")
-        group.add_argument("--input_type", default="rest",choices=['rest','task'],help='refer to datasets.py')
+        group.add_argument("--input_type", default="movieDM",choices=['rest','task', 'movieDM', 'movieTP'],help='refer to datasets.py')
         group.add_argument("--train_split", default=0.7, type=float)
         group.add_argument("--val_split", default=0.15, type=float)
         group.add_argument("--batch_size", type=int, default=4)
