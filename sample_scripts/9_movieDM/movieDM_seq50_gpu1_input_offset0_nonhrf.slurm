@@ -34,17 +34,17 @@ python -c "import torch; print(torch.cuda.device_count())"  # GPU 개수 출력
 
 # 필요한 환경 변수 설정
 export MASTER_ADDR=`/bin/hostname -s`
-export MASTER_PORT=30753
+export MASTER_PORT=20750
 export WANDB_API_KEY="ce3d72b255c21a2b99cd48915d63b62d36a17828"
 
-EXPERIMENT_NAME="${SLURM_JOB_ID}_movieTP_offset0_seq50_$(date +'%Y-%m-%d_%H-%M-%S')"
+EXPERIMENT_NAME="${SLURM_JOB_ID}_movieDM_offset0_seq30_nonhrf_$(date +'%Y-%m-%d_%H-%M-%S')"
 
 TRAINER_ARGS="--accelerator gpu --max_epochs 80 --precision 16 --num_nodes 1 --devices 1 --strategy ddp --accumulate_grad_batches 2" # specify the number of gpus as '--devices'
-MAIN_ARGS='--loggername wandb --dataset_name HBN --image_path /data/HBN/2.4.1.movieTP_MNI_to_TRs_smooth_znorm_241120'
-DATA_ARGS='--batch_size 4 --eval_batch_size 4 --num_workers 4 --input_type movieTP'
+MAIN_ARGS='--loggername wandb --dataset_name HBN --image_path /data/HBN/3.3.1.movieDM_MNI_to_TRs_smooth_znorm_241120'
+DATA_ARGS='--batch_size 4 --eval_batch_size 4 --num_workers 4 --input_type movieDM'
 DEFAULT_ARGS="--project_name moviefmri --experiment_name $EXPERIMENT_NAME"
 OPTIONAL_ARGS='--c_multiplier 2 --last_layer_full_MSA --clf_head_version v1 --downstream_task emotions --downstream_task_type regression' #--use_scheduler --gamma 0.5 --cycle 0.5' 
-RESUME_ARGS='--adjust_hrf --input_offset 0'
+RESUME_ARGS='--input_offset 0'
  
 # TODO: srun으로 수정 
 srun -N 1 -n 1 bash -c "
