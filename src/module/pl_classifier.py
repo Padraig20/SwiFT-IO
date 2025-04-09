@@ -63,17 +63,36 @@ class LitClassifier(pl.LightningModule):
         # ✅ 6. 안전한 값만 `save_hyperparameters()`에 전달
         self.save_hyperparameters(hparams)
 
+        # # you should define target_values at the Dataset classes
+        # target_values = data_module.train_dataset.target_values
+        # if self.hparams.label_scaling_method == 'standardization':
+        #     scaler = StandardScaler()
+        #     normalized_target_values = scaler.fit_transform(target_values)
+        #     print(f'target_mean:{scaler.mean_[0]}, target_std:{scaler.scale_[0]}')
+        # elif self.hparams.label_scaling_method == 'minmax': 
+        #     scaler = MinMaxScaler()
+        #     normalized_target_values = scaler.fit_transform(target_values)
+        #     print(f'target_max:{scaler.data_max_[0]},target_min:{scaler.data_min_[0]}')
+        # self.scaler = scaler
+
         # you should define target_values at the Dataset classes
-        target_values = data_module.train_dataset.target_values
-        if self.hparams.label_scaling_method == 'standardization':
-            scaler = StandardScaler()
-            normalized_target_values = scaler.fit_transform(target_values)
-            print(f'target_mean:{scaler.mean_[0]}, target_std:{scaler.scale_[0]}')
-        elif self.hparams.label_scaling_method == 'minmax': 
-            scaler = MinMaxScaler()
-            normalized_target_values = scaler.fit_transform(target_values)
-            print(f'target_max:{scaler.data_max_[0]},target_min:{scaler.data_min_[0]}')
-        self.scaler = scaler
+        if data_module and hasattr(data_module, "train_dataset"):
+            target_values = data_module.train_dataset.target_values
+
+            if self.hparams.label_scaling_method == 'standardization':
+                scaler = StandardScaler()
+                normalized_target_values = scaler.fit_transform(target_values)
+                print(f'target_mean:{scaler.mean_[0]}, target_std:{scaler.scale_[0]}')
+            elif self.hparams.label_scaling_method == 'minmax': 
+                scaler = MinMaxScaler()
+                normalized_target_values = scaler.fit_transform(target_values)
+                print(f'target_max:{scaler.data_max_[0]},target_min:{scaler.data_min_[0]}')
+            self.scaler = scaler
+        else:
+            print("⚠️ No train_dataset provided — skipping target normalization")
+            self.scaler = None  # fallback: not used
+
+
         print(self.hparams.model)
         self.model = load_model(self.hparams.model, self.hparams)
         

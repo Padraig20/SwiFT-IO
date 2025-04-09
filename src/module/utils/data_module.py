@@ -19,7 +19,7 @@ class fMRIDataModule(pl.LightningDataModule):
         os.makedirs(split_dir_path, exist_ok=True)
         self.split_file_path = os.path.join(split_dir_path, f"split_fixed_{self.hparams.dataset_split_num}.txt")
         
-        self.setup()
+        # self.setup() 
 
         #pl.seed_everything(seed=self.hparams.data_seed)
 
@@ -121,10 +121,11 @@ class fMRIDataModule(pl.LightningDataModule):
                 
                 if self.hparams.input_type == 'movieDM':
                     meta_data = pd.read_csv("/pscratch/sd/k/kimbo/SwiFT-IO/metadata/DespicableMe_summary_codes_1.2Hz_intuitivenames_260120.csv") # TODO change later
+                    
                 elif self.hparams.input_type == 'movieTP':
                     meta_data = pd.read_csv("/pscratch/sd/k/kimbo/SwiFT-IO/metadata/ThePresent_summary_codes_1.2Hz_intuitivenames_260120.csv")
+                meta_task = meta_data[task_name + ['frame']].dropna() 
                 
-                meta_task = meta_data[task_name + ['frame']].dropna()
 
                 for subject in os.listdir(img_root):
                         sex = 1 # arbitrary value, not used
@@ -171,35 +172,67 @@ class fMRIDataModule(pl.LightningDataModule):
         if self.hparams.limit_training_samples:
             train_names = np.random.choice(train_names, size=self.hparams.limit_training_samples, replace=False, p=None)
         
-        train_dict = {key: subject_dict[key] for key in train_names if key in subject_dict}
-        val_dict = {key: subject_dict[key] for key in val_names if key in subject_dict}
-        test_dict = {key: subject_dict[key] for key in test_names if key in subject_dict}
+        # train_dict = {key: subject_dict[key] for key in train_names if key in subject_dict}
+        # val_dict = {key: subject_dict[key] for key in val_names if key in subject_dict}
+        # test_dict = {key: subject_dict[key] for key in test_names if key in subject_dict}
         
-        self.train_dataset = Dataset(**params,subject_dict=train_dict,use_augmentations=False, train=True)
-        # load train mean/std of target labels to val/test dataloader
-        self.val_dataset = Dataset(**params,subject_dict=val_dict,use_augmentations=False,train=False) 
-        self.test_dataset = Dataset(**params,subject_dict=test_dict,use_augmentations=False,train=False) 
+        # self.train_dataset = Dataset(**params,subject_dict=train_dict,use_augmentations=False, train=True)
+        # # load train mean/std of target labels to val/test dataloader
+        # self.val_dataset = Dataset(**params,subject_dict=val_dict,use_augmentations=False,train=False) 
+        # self.test_dataset = Dataset(**params,subject_dict=test_dict,use_augmentations=False,train=False) 
         
-        print("number of train_subj:", len(train_dict))
-        print("number of val_subj:", len(val_dict))
-        print("number of test_subj:", len(test_dict))
-        print("length of train_idx:", len(self.train_dataset.data))
-        print("length of val_idx:", len(self.val_dataset.data))  
-        print("length of test_idx:", len(self.test_dataset.data))
+        # print("number of train_subj:", len(train_dict))
+        # print("number of val_subj:", len(val_dict))
+        # print("number of test_subj:", len(test_dict))
+        # print("length of train_idx:", len(self.train_dataset.data))
+        # print("length of val_idx:", len(self.val_dataset.data))  
+        # print("length of test_idx:", len(self.test_dataset.data))
         
+        if stage in (None, "fit"):  # train + val
+            train_dict = {key: subject_dict[key] for key in train_names if key in subject_dict}
+            val_dict = {key: subject_dict[key] for key in val_names if key in subject_dict}
+
+            self.train_dataset = Dataset(**params, subject_dict=train_dict, use_augmentations=False, train=True)
+            self.val_dataset = Dataset(**params, subject_dict=val_dict, use_augmentations=False, train=False)
+
+            def get_params(train):
+                return {
+                    "batch_size": self.hparams.batch_size if train else self.hparams.eval_batch_size,
+                    "num_workers": self.hparams.num_workers,
+                    "drop_last": True,
+                    "pin_memory": False,
+                    "persistent_workers": False,
+                    "shuffle": train,
+                }
+
+            self.train_loader = DataLoader(self.train_dataset, **get_params(train=True))
+            self.val_loader = DataLoader(self.val_dataset, **get_params(train=False))
+            print("number of train_subj:", len(train_dict))
+            print("number of val_subj:", len(val_dict))
+            print("length of val_idx:", len(self.val_dataset.data))  
+            print("length of test_idx:", len(self.test_dataset.data))
+
+        if stage in (None, "test", "predict"):
+            test_dict = {key: subject_dict[key] for key in test_names if key in subject_dict}
+            self.test_dataset = Dataset(**params, subject_dict=test_dict, use_augmentations=False, train=False)
+            self.test_loader = DataLoader(self.test_dataset, batch_size=self.hparams.eval_batch_size, num_workers=self.hparams.eval_num_workers, drop_last=False, pin_memory=False, persistent_workers=False, shuffle=False)
+
+            print("number of test_subj:", len(test_dict))
+            print("length of test_idx:", len(self.test_dataset.data))
+
         # DistributedSampler is internally called in pl.Trainer
-        def get_params(train):
-            return {
-                "batch_size": self.hparams.batch_size if train else self.hparams.eval_batch_size,
-                "num_workers": self.hparams.num_workers,
-                "drop_last": True,
-                "pin_memory": False,
-                "persistent_workers": False if self.hparams.dataset_name == 'Dummy' else (train and (self.hparams.strategy == 'ddp')),
-                "shuffle": train
-            }
-        self.train_loader = DataLoader(self.train_dataset, **get_params(train=True))
-        self.val_loader = DataLoader(self.val_dataset, **get_params(train=False))
-        self.test_loader = DataLoader(self.test_dataset, **get_params(train=False))
+        # def get_params(train):
+        #     return {
+        #         "batch_size": self.hparams.batch_size if train else self.hparams.eval_batch_size,
+        #         "num_workers": self.hparams.num_workers,
+        #         "drop_last": True,
+        #         "pin_memory": False,
+        #         "persistent_workers": False if self.hparams.dataset_name == 'Dummy' else (train and (self.hparams.strategy == 'ddp')),
+        #         "shuffle": train
+        #     }
+        # self.train_loader = DataLoader(self.train_dataset, **get_params(train=True))
+        # self.val_loader = DataLoader(self.val_dataset, **get_params(train=False))
+        # self.test_loader = DataLoader(self.test_dataset, **get_params(train=False))
         
 
     def train_dataloader(self):
