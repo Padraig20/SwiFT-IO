@@ -120,10 +120,10 @@ class fMRIDataModule(pl.LightningDataModule):
                     raise ValueError('downstream task type not supported')
                 
                 if self.hparams.input_type == 'movieDM':
-                    meta_data = pd.read_csv("/pscratch/sd/k/kimbo/SwiFT-IO/metadata/DespicableMe_summary_codes_1.2Hz_intuitivenames_260120.csv") # TODO change later
+                    meta_data = pd.read_csv("/scratch/connectome/kimbo/SwiFT-IO-2/SwiFT-IO/metadata/DespicableMe_summary_codes_1.2Hz_intuitivenames_260120.csv") # TODO change later
                     
                 elif self.hparams.input_type == 'movieTP':
-                    meta_data = pd.read_csv("/pscratch/sd/k/kimbo/SwiFT-IO/metadata/ThePresent_summary_codes_1.2Hz_intuitivenames_260120.csv")
+                    meta_data = pd.read_csv("/scratch/connectome/kimbo/SwiFT-IO-2/SwiFT-IO/metadata/ThePresent_summary_codes_1.2Hz_intuitivenames_260120.csv")
                 meta_task = meta_data[task_name + ['frame']].dropna() 
                 
 
