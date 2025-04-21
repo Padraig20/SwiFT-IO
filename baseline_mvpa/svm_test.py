@@ -5,11 +5,12 @@ import os
 from sklearn.svm import SVR
 from nilearn.decoding import FREMRegressor
 from sklearn.metrics import mean_squared_error, r2_score
-import joblib
+from sklearn.model_selection import GridSearchCV
 import nibabel as nib
 from nilearn.image import resample_to_img
 import pandas as pd
 from pathlib import Path
+import joblib
 
 # ========= Parameters 설정 =========
 input_type = 'movieDM'
@@ -111,22 +112,40 @@ X_train, y_train = prepare_data(train_names)
 X_val, y_val = prepare_data(val_names)
 X_test, y_test = prepare_data(test_names)
 
-# === SVM regression ===
-decoder = FREMRegressor(
-    estimator=SVR(kernel='linear'),
-    standardize='zscore_sample',
-    smoothing_fwhm=None,
-    screening_percentile=20,
+# === GridSearch 파라미터 세트 정의 ===
+param_grid = {
+    'estimator__C': [0.1, 1, 10],
+    'estimator__epsilon': [0.01, 0.1],
+}
+
+# === GridSearchCV 객체 생성 ===
+grid_decoder = GridSearchCV(
+    FREMRegressor(
+        estimator=SVR(kernel='linear'),
+        standardize='zscore_sample',
+        smoothing_fwhm=None,
+        screening_percentile=20,
+        scoring='neg_mean_squared_error',
+        mask=resampled_mask
+    ),
+    param_grid,
+    cv=3,
     scoring='neg_mean_squared_error',
-    mask=resampled_mask
+    n_jobs=-1
 )
 
-# 모델 학습
-decoder.fit(X_train, y_train)
+# === GridSearchCV로 모델 학습 ===
+grid_decoder.fit(X_train, y_train)
 
-# 평가
+# === 최적의 하이퍼파라미터 출력 ===
+print("Best parameters:", grid_decoder.best_params_)
+
+# === 최적의 모델 저장 ===
+joblib.dump(grid_decoder.best_estimator_, 'best_frem_regressor_model.joblib')
+
+# === 평가 ===
 for name, X, y in zip(['Train', 'Validation', 'Test'], [X_train, X_val, X_test], [y_train, y_val, y_test]):
-    pred = decoder.predict(X)
+    pred = grid_decoder.predict(X)
     mse = mean_squared_error(y, pred)
     r2 = r2_score(y, pred)
     print(f"{name} MSE: {mse:.4f}, R²: {r2:.4f}")

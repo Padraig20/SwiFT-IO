@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH --job-name=svm_mvpa
+#SBATCH --job-name=svm_mvpa_test
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
 #SBATCH --cpus-per-task=16
