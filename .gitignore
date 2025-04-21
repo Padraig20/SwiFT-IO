@@ -21,3 +21,5 @@ src/summary
 metadata
 
 igmap/sub-NDARVN715MJ9_task-movieDM_space-MNI152NLin2009cAsym_desc-preproc_bold_smoothed.nii.gz
+
+baseline_mvpa/slurm_script/logs
