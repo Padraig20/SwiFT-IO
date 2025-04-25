@@ -188,22 +188,22 @@ class fMRIDataModule(pl.LightningDataModule):
         # print("length of val_idx:", len(self.val_dataset.data))  
         # print("length of test_idx:", len(self.test_dataset.data))
         
+        def get_params(train):
+            return {
+                "batch_size": self.hparams.batch_size if train else self.hparams.eval_batch_size,
+                "num_workers": self.hparams.num_workers,
+                "drop_last": True,
+                "pin_memory": False,
+                "persistent_workers": False,
+                "shuffle": train,
+            }
+        
         if stage in (None, "fit"):  # train + val
             train_dict = {key: subject_dict[key] for key in train_names if key in subject_dict}
             val_dict = {key: subject_dict[key] for key in val_names if key in subject_dict}
 
             self.train_dataset = Dataset(**params, subject_dict=train_dict, use_augmentations=False, train=True)
             self.val_dataset = Dataset(**params, subject_dict=val_dict, use_augmentations=False, train=False)
-
-            def get_params(train):
-                return {
-                    "batch_size": self.hparams.batch_size if train else self.hparams.eval_batch_size,
-                    "num_workers": self.hparams.num_workers,
-                    "drop_last": True,
-                    "pin_memory": False,
-                    "persistent_workers": False,
-                    "shuffle": train,
-                }
 
             self.train_loader = DataLoader(self.train_dataset, **get_params(train=True))
             self.val_loader = DataLoader(self.val_dataset, **get_params(train=False))
