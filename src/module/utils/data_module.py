@@ -209,13 +209,13 @@ class fMRIDataModule(pl.LightningDataModule):
             self.val_loader = DataLoader(self.val_dataset, **get_params(train=False))
             print("number of train_subj:", len(train_dict))
             print("number of val_subj:", len(val_dict))
-            print("length of val_idx:", len(self.val_dataset.data))  
-            print("length of test_idx:", len(self.test_dataset.data))
+            print("length of train_idx:", len(self.train_dataset.data))  
+            print("length of val_idx:", len(self.val_dataset.data))
 
         if stage in (None, "test", "predict"):
             test_dict = {key: subject_dict[key] for key in test_names if key in subject_dict}
             self.test_dataset = Dataset(**params, subject_dict=test_dict, use_augmentations=False, train=False)
-            self.test_loader = DataLoader(self.test_dataset, batch_size=self.hparams.eval_batch_size, num_workers=self.hparams.eval_num_workers, drop_last=False, pin_memory=False, persistent_workers=False, shuffle=False)
+            self.test_loader = DataLoader(self.test_dataset, **get_params(train=False))
 
             print("number of test_subj:", len(test_dict))
             print("length of test_idx:", len(self.test_dataset.data))
