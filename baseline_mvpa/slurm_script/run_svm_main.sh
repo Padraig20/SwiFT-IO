@@ -12,7 +12,7 @@
 
 #  환경 세팅
 source /usr/anaconda3/etc/profile.d/conda.sh
-source activate swiftio  # 사용하는 conda 환경 이름으로 변경
+conda activate swiftio  # 사용하는 conda 환경 이름으로 변경
 
 # 작업 디렉토리로 이동 (필요시 변경)
 cd /scratch/connectome/kimbo/SwiFT-IO-2/SwiFT-IO/baseline_mvpa/

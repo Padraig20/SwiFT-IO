@@ -9,6 +9,8 @@ sample_scripts
 logs
 
 .neptune
+.ipynb
+baseline_mvpa/save_svm.ipynb
 
 analysis
 

@@ -36,6 +36,7 @@ brain_mask_path = '/scratch/connectome/kimbo/SwiFT-IO-2/SwiFT-IO/analysis/4_IGma
 brain_mask_img = nib.load(brain_mask_path)
 resampled_mask = resample_to_img(brain_mask_img, affine_img, interpolation='nearest')
 
+print('---------Load subject spit file------------')
 # === Subject 순서 및 그룹 로딩 ===
 with open(split_file_path, "r") as f:
     subject_order = f.read().splitlines()
@@ -52,6 +53,7 @@ train_names = train_names[:10]
 val_names = val_names[:10]
 test_names = test_names[:10]
 
+print('---------Load Emotion data------------')
 # === Emotion Timeseries 데이터 로딩 ===
 emotion_df = pd.read_csv(emotion_timeseries_file)
 emotion_vars = ['Positive', 'Negative']
@@ -64,7 +66,6 @@ window_size = seq_length
 num_windows = total_length // window_size
 target_values = [emotion_df[target].iloc[i:i + window_size].mean() for i in range(0, num_windows * window_size, window_size)]
 target_values = np.array(target_values)
-
 # === 데이터 로딩 함수 ===
 def load_4d_fmri_from_pt(subject, base_dir, total_length, seq_length, affine):
     subject_dir = os.path.join(base_dir, subject)
@@ -108,9 +109,24 @@ def prepare_data(names):
         y.extend(target_values)
     return X, np.array(y)
 
+print('---------Load input and output data------------')
+# 데이터를 먼저 불러온 후에 mask를 fmri shape으로 맞춤
+print('---------[Training] Load input and output data------------')
 X_train, y_train = prepare_data(train_names)
+print('---------[Validation] Load input and output data------------')
 X_val, y_val = prepare_data(val_names)
+print('---------[Test] Load input and output data------------')
 X_test, y_test = prepare_data(test_names)
+
+# === fmri 데이터를 기준으로 Mask 다시 리샘플링 ===
+resampled_mask = resample_to_img(brain_mask_img, X_test[0], interpolation='nearest')
+
+# 확인 (최종 체크)
+print(f"fMRI Test Shape: {X_test[0].shape}")
+print(f"Resampled Mask Shape: {resampled_mask.shape}")
+print(f"fMRI Test Affine:\n{X_test[0].affine}")
+print(f"Resampled Mask Affine:\n{resampled_mask.affine}")
+
 
 # === GridSearch 파라미터 세트 정의 ===
 param_grid = {
@@ -134,6 +150,7 @@ grid_decoder = GridSearchCV(
     n_jobs=-1
 )
 
+print('-------GridSearchCV----------')
 # === GridSearchCV로 모델 학습 ===
 grid_decoder.fit(X_train, y_train)
 
@@ -149,3 +166,4 @@ for name, X, y in zip(['Train', 'Validation', 'Test'], [X_train, X_val, X_test],
     mse = mean_squared_error(y, pred)
     r2 = r2_score(y, pred)
     print(f"{name} MSE: {mse:.4f}, R²: {r2:.4f}")
+
