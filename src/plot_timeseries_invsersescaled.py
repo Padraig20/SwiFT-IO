@@ -49,6 +49,7 @@ ckpt['hyper_parameters']['input_type'] = 'movieDM'
 ckpt['hyper_parameters']['bad_subj_path'] = ''
 ckpt['hyper_parameters']['limit_training_samples'] = 0
 ckpt['hyper_parameters']['image_path'] = "/global/cfs/cdirs/m4750/HBN/3.3.1.movieDM_MNI_to_TRs_smooth_znorm_241120"
+ckpt['hyper_parameters']['eval_num_workers'] = 1
 args = ckpt['hyper_parameters']
 
 data_module = fMRIDataModule(**args)

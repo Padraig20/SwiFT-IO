@@ -19,3 +19,9 @@ src/wandb
 src/summary
 
 metadata
+
+tmp
+
+analysis/results
+
+data_behavior

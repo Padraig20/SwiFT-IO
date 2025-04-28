@@ -41,7 +41,7 @@ EMOTION_LABELS = ['Anger', 'Happy', 'Fear', 'Sad', 'Excited', 'Positive', 'Negat
 if SPECIFY_EMOTION:
     EMOTION_IDX = EMOTION_LABELS.index(SPECIFY_EMOTION)
 
-PROJECT_ROOT = Path("/home/patrickstyll/Bachelorstudiengang-Software_and_Information_Engineering/SNU_Connectome_Lab/SwiFT-IO")
+PROJECT_ROOT = Path("/pscratch/sd/k/kimbo/SwiFT-IO/")
 DATA_CSV = PROJECT_ROOT / "results_each" / RUN_ID / "residuals.csv"
 
 # load data
