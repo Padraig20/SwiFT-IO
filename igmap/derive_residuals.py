@@ -5,102 +5,135 @@ from pathlib import Path
 from tqdm import tqdm
 import sys
 import argparse
+from torch.utils.data import DataLoader
 
 # ===========================
-# 예시 실행 방법:
-# python derive_residuals.py --run_id tubg3tim --input_type movieDM --seq_length 50
+# Example Usage:
+# python derive_residuals.py --run_id tubg3tim --input_type movieDM --seq_length 50 --data test
 # ===========================
 
-# CLI 인자 받기
+# CLI Setup
 parser = argparse.ArgumentParser(description="Extract residuals from model predictions and save with frame info.")
-parser.add_argument('--run_id', type=str, required=True, help='Run ID (e.g., cvy8kv4o)')
-parser.add_argument('--input_type', type=str, choices=['movieDM', 'movieTP'], required=True, help='Input type')
-parser.add_argument('--seq_length', type=int, default=50, help='Sequence length (default: 50)')
+parser.add_argument('--run_id',
+                    type=str,
+                    required=True,
+                    help='Run ID (e.g., cvy8kv4o)')
+parser.add_argument('--input_type',
+                    type=str,
+                    choices=['movieDM', 'movieTP'],
+                    required=True,
+                    help='Input type')
+parser.add_argument('--seq_length',
+                    type=int,
+                    default=50,
+                    help='Sequence length (default: 50)')
+parser.add_argument('--data',
+                    type=str,
+                    required=True,
+                    choices=['train', 'val', 'test'],
+                    help='Data type to load (train, val, test)')
 args_cli = parser.parse_args()
 
-run_id = args_cli.run_id
-input_type = args_cli.input_type
-seq_length = args_cli.seq_length
+RUN_ID = args_cli.run_id
+INPUT_TYPE = args_cli.input_type
+SEQ_LENGTH = args_cli.seq_length
+DATA_SPLIT = args_cli.data
 
-# 감정 레이블
-emotion_labels = ['Anger', 'Happy', 'Fear', 'Sad', 'Excited', 'Positive', 'Negative']
+EMOTION_LABELS = ['Anger', 'Happy', 'Fear', 'Sad', 'Excited', 'Positive', 'Negative']
 
-# 프로젝트 경로 설정
-project_root = Path("/pscratch/sd/k/kimbo/SwiFT-IO")
-project_main = project_root / "src"
-sys.path.append(str(project_main))
+PROJECT_ROOT = Path("/scratch/connectome/patrickstyll/kimbo/SwiFT-IO")
+PROJECT_MAIN = PROJECT_ROOT / "src"
+sys.path.append(str(PROJECT_MAIN))
 
-from module.models.encoder.swin4d_transformer_ver7 import SwinTransformer4D
 from module.pl_classifier import LitClassifier
 from module.utils.data_module import fMRIDataModule
 
-# 체크포인트 경로 설정
-project_id = "moviefmri"
-ckpt_dir = project_root / f"output/{project_id}/{run_id}"
-ckpt_path = list(ckpt_dir.glob("checkpt*"))[0]
-ckpt = torch.load(ckpt_path, map_location='cpu')
+# checkpoint-specific
+PROJECT_ID = "moviefmri"
+CKPT_DIR = PROJECT_ROOT / f"output/{PROJECT_ID}/{RUN_ID}"
+CKPT_PATH = list(CKPT_DIR.glob("checkpt*"))[0]
 
-# 하이퍼파라미터 설정 및 덮어쓰기
-ckpt['hyper_parameters']['input_type'] = input_type
-ckpt['hyper_parameters']['seq_length'] = seq_length
-ckpt['hyper_parameters']['image_path'] = "/global/cfs/cdirs/m4750/HBN/3.3.1.movieDM_MNI_to_TRs_smooth_znorm_241120"
-ckpt['hyper_parameters']['default_root_dir'] = str(project_root / "output/moviefmri")
+ckpt = torch.load(CKPT_PATH, map_location='cpu')
+
+# override hyperparams of checkpoint
+# TODO where do these values come from? e.g. input_offset is 3, why? Why would it need to be overridden?
+ckpt['hyper_parameters']['input_type'] = INPUT_TYPE
+ckpt['hyper_parameters']['seq_length'] = SEQ_LENGTH
+ckpt['hyper_parameters']['image_path'] = "/scratch/HBN/3.3.1.movieDM_MNI_to_TRs_smooth_znorm_241120"
+ckpt['hyper_parameters']['default_root_dir'] = str(PROJECT_ROOT / "output/moviefmri")
 ckpt['hyper_parameters']['shuffle_time_sequence'] = False
 ckpt['hyper_parameters']['time_as_channel'] = False
 ckpt['hyper_parameters']['eval_batch_size'] = 1
-ckpt['hyper_parameters']['input_offset'] = 3
+#ckpt['hyper_parameters']['input_offset'] = 3
 ckpt['hyper_parameters']['bad_subj_path'] = None
 ckpt['hyper_parameters']['limit_training_samples'] = 0
-ckpt['hyper_parameters']['img_size'] = [96, 96, 96, seq_length]
+ckpt['hyper_parameters']['img_size'] = [96, 96, 96, SEQ_LENGTH]
 args = ckpt['hyper_parameters']
 
-# total_frame 설정
-total_frame = 750 if input_type == 'movieDM' else 300
-
-# 데이터 모듈 초기화
+# data loading
 data_module = fMRIDataModule(**args)
 data_module.setup()
 data_module.prepare_data()
-test_loader = data_module.test_dataloader()
 
-# 모델 초기화
+if DATA_SPLIT == "train":
+    test_loader = data_module.train_dataloader()
+elif DATA_SPLIT == "val":
+    test_loader = data_module.val_dataloader()[0]
+elif DATA_SPLIT == "test":
+    test_loader = data_module.test_dataloader()
+else:
+    raise ValueError(f"Invalid data split: {DATA_SPLIT}. Choose from 'train', 'val', or 'test'.")
+
+# model loading
 model = LitClassifier(data_module=data_module, **args)
 model.load_state_dict(ckpt['state_dict'])
 model.eval()
 model.cpu()
 
-# 결과 저장 경로
-save_dir = Path(f"/pscratch/sd/k/kimbo/SwiFT-IO/analysis/4_IGmap/results_each/{run_id}")
+# result directory
+save_dir = Path(f"/scratch/connectome/patrickstyll/kimbo/SwiFT-IO/results_each/{RUN_ID}")
 save_dir.mkdir(parents=True, exist_ok=True)
 
-# 예측 및 오차 저장 함수
-def save_predictions_and_residuals(model, test_loader, save_dir):
-    rows = []
+@torch.no_grad()
+def save_predictions_and_residuals(model: LitClassifier,
+                                   test_loader: DataLoader,
+                                   save_dir: Path) -> None:
+    """ Save model predictions and residuals to CSV and npy files.
+    Args:
+        model (LitClassifier): The trained model.
+        test_loader (DataLoader): DataLoader for the test dataset.
+        save_dir (Path): Directory to save the results.
+    """
+    
+    # pre-allocate space
+    
+    rows = [] # corresponds to each segment of a subject
     segment_counter = {}
-
-    # 전체 저장용 dict 초기화
+    
     full_data = {
         "subject": [],
         "start_frame": [],
         "end_frame": [],
     }
-    for i, label in enumerate(emotion_labels):
+    
+    for i, label in enumerate(EMOTION_LABELS):
         full_data[f"residual_{i}_{label}"] = []
         full_data[f"prediction_{i}_{label}"] = []
 
-    for idx, data in enumerate(tqdm(test_loader)):
+    for data in tqdm(test_loader, desc="Processing test data", unit="sequence"): # batch size = 1
+        # data['fmri_sequence'] shape: (1, 96, 96, 96, SEQ_LENGTH)
         subj_name = data['subject_name'][0]
         input_ts = data['fmri_sequence'].float().cpu()
-        target = data['target'].float().cpu()  # shape: (1, 50, 7)
+        target = data['target'].float().cpu()  # shape: (1, SEQ_LENGTH, EMOTIONS)
 
-        with torch.no_grad():
-            pred = model(input_ts)  # shape: (50, 7)
+        pred = model(input_ts)  # shape: (SEQ_LENGTH, EMOTIONS)
+        residual = torch.abs(pred - target.squeeze(0))  # shape: (SEQ_LENGTH, EMOTIONS)
 
-        residual = torch.abs(pred - target.squeeze(0))  # shape: (50, 7)
-
+        # segment the data
+        # segment_counter keeps track of how many segments have been processed for each subject
         seg_idx = segment_counter.get(subj_name, 0)
-        start = seg_idx * seq_length
-        end = start + seq_length - 1
+        start = seg_idx * SEQ_LENGTH
+        end = start + SEQ_LENGTH - 1
         segment_counter[subj_name] = seg_idx + 1
 
         residual_np = residual.detach().cpu().numpy()
@@ -116,7 +149,8 @@ def save_predictions_and_residuals(model, test_loader, save_dir):
         full_data["start_frame"].append(start)
         full_data["end_frame"].append(end)
 
-        for i, emotion in enumerate(emotion_labels):
+        # save residuals and predictions for each emotion
+        for i, emotion in enumerate(EMOTION_LABELS):
             r_list = residual_np[:, i].tolist()
             p_list = pred_np[:, i].tolist()
             row[f"residual_{i}_{emotion}"] = r_list
@@ -126,14 +160,13 @@ def save_predictions_and_residuals(model, test_loader, save_dir):
 
         rows.append(row)
 
-    # CSV 저장
+    # save as csv
     df = pd.DataFrame(rows)
-    df.to_csv(save_dir / "residuals.csv", index=False)
-    print(f"Saved residuals.csv to {save_dir}")
+    df.to_csv(save_dir / f"residuals_{DATA_SPLIT}.csv", index=False)
+    print(f"Saved residuals_{DATA_SPLIT}.csv to {save_dir}")
 
-    # npy 저장
-    np.save(save_dir / "residuals.npy", full_data)
-    print(f"Saved residuals.npy with subject and frame info to {save_dir}")
+    # save as npy file
+    np.save(save_dir / f"residuals_{DATA_SPLIT}.npy", full_data)
+    print(f"Saved residuals_{DATA_SPLIT}.npy with subject and frame info to {save_dir}")
 
-# 실행
 save_predictions_and_residuals(model, test_loader, save_dir)
