@@ -137,16 +137,11 @@ def cli_main():
     # ------------ data -------------
     data_module = Dataset(**vars(args))
     pl.seed_everything(args.seed)
-    
+    # kimbo change; 🔥 여기에 setup(stage='fit') 명시적으로 호출
+    data_module.setup(stage='fit')
     
 
     # ------------ logger -------------
-    # log_every_n_steps = int(data_module.test_loader.dataset.total_len / (args.batch_size * int(num_nodes) * int(devices))) - 1
-    # log_every_n_steps = 1 if log_every_n_steps == 0 else log_every_n_steps
-    # log_every_n_steps = 50 if log_every_n_steps > 50 else log_every_n_steps
-    # print("log_every_n_steps:",log_every_n_steps)
-
-
     if args.loggername == "tensorboard":
         # logger = True  # tensor board is a default logger of Trainer class
         dirpath = args.default_root_dir
@@ -265,7 +260,7 @@ def cli_main():
             # Resume existing run
             trainer.fit(model, datamodule=data_module, ckpt_path=args.resume_ckpt_path)
 
-        trainer.test(model, dataloaders=data_module) # 여기서 Best ckpt를 가져와야함. 
+        trainer.test(model, dataloaders=data_module, ckpt_path="best") # 여기서 Best ckpt를 가져와야함. 
     
     if args.save_encoder:
         model.save_encoder(args.save_encoder)

@@ -197,26 +197,31 @@ class fMRIDataModule(pl.LightningDataModule):
                 "persistent_workers": False,
                 "shuffle": train,
             }
+        print(f"현재 실행중인 stage: {stage}")
         
         if stage in (None, "fit"):  # train + val
             train_dict = {key: subject_dict[key] for key in train_names if key in subject_dict}
             val_dict = {key: subject_dict[key] for key in val_names if key in subject_dict}
+            test_dict = {key: subject_dict[key] for key in test_names if key in subject_dict}
 
             self.train_dataset = Dataset(**params, subject_dict=train_dict, use_augmentations=False, train=True)
             self.val_dataset = Dataset(**params, subject_dict=val_dict, use_augmentations=False, train=False)
-
+            self.test_dataset = Dataset(**params, subject_dict=test_dict, use_augmentations=False, train=False)
+            
             self.train_loader = DataLoader(self.train_dataset, **get_params(train=True))
             self.val_loader = DataLoader(self.val_dataset, **get_params(train=False))
+            self.test_loader = DataLoader(self.test_dataset, **get_params(train=False))
             print("number of train_subj:", len(train_dict))
             print("number of val_subj:", len(val_dict))
             print("length of train_idx:", len(self.train_dataset.data))  
             print("length of val_idx:", len(self.val_dataset.data))
+            print("number of test_subj:", len(test_dict))
+            print("length of test_idx:", len(self.test_dataset.data))
 
-        if stage in (None, "test", "predict"):
+        if stage in ("test", "predict"): # kimbo change
             test_dict = {key: subject_dict[key] for key in test_names if key in subject_dict}
             self.test_dataset = Dataset(**params, subject_dict=test_dict, use_augmentations=False, train=False)
             self.test_loader = DataLoader(self.test_dataset, **get_params(train=False))
-
             print("number of test_subj:", len(test_dict))
             print("length of test_idx:", len(self.test_dataset.data))
 
