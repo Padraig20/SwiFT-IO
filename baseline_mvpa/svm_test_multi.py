@@ -115,18 +115,24 @@ def load_4d_fmri_from_pt(subject, base_dir, offset, n_frames, window, aff):
     return [nib.Nifti1Image(seq.mean(-1), aff) for seq in seqs_4d]
 
 # ========= Prepare datasets =========
-def prepare(names):
+def prepare(names, split_name):
     X, y = [], []
-    for subj in names:
-        X.extend(load_4d_fmri_from_pt(subj, data_base_dir, input_offset, num_windows * seq_length, seq_length, affine))
+    print(f'\n🚩 Starting {split_name} data preparation. Total subjects: {len(names)}')
+    for idx, subj in enumerate(names, 1):
+        print(f'[{split_name}] Processing subject {idx}/{len(names)}: {subj}')
+        subj_X = load_4d_fmri_from_pt(subj, data_base_dir, input_offset, num_windows * seq_length, seq_length, affine)
+        X.extend(subj_X)
         y.extend(target_vals)
+        print(f'[{split_name}] Subject {subj} done. Total samples so far: {len(X)}')
+    print(f'✅ Finished preparing {split_name} dataset. Total samples: {len(X)}')
     return X, np.asarray(y, dtype=np.float32)
 
-X_train, y_train = prepare(train_names)
-X_val, y_val = prepare(val_names)
-X_test, y_test = prepare(test_names)
+X_train, y_train = prepare(train_names, 'Train')
+X_val, y_val = prepare(val_names, 'Validation')
+X_test, y_test = prepare(test_names, 'Test')
 
 # ========= Train multi-output SVR =========
+print('\n🚩 Starting model training...')
 base_decoder = FREMRegressor(
     estimator=SVR(kernel='linear'),
     standardize='zscore_sample',
@@ -138,17 +144,21 @@ base_decoder = FREMRegressor(
 
 decoder = MultiOutputRegressor(base_decoder, n_jobs=1)
 decoder.fit(X_train, y_train)
+print('✅ Model training completed.')
 
 # ========= Evaluate & save performance =========
 performance = []
 for split, X, y in [('Train', X_train, y_train),
                     ('Validation', X_val, y_val),
                     ('Test', X_test, y_test)]:
+    print(f'\n🚩 Evaluating {split} set...')
     pred = decoder.predict(X)
     mse = mean_squared_error(y, pred, multioutput='raw_values')
     r2 = r2_score(y, pred, multioutput='raw_values')
     for var, m, r in zip(emotion_vars, mse, r2):
         performance.append({'Split': split, 'Emotion': var, 'MSE': m, 'R2': r})
+        print(f'[{split}] {var:<8} ➜ MSE: {m:.4f}, R²: {r:.4f}')
+print('✅ Evaluation completed.')
 
 performance_df = pd.DataFrame(performance)
 
@@ -159,8 +169,10 @@ model_save_path = os.path.join(
 )
 performance_csv_path = model_save_path.replace('.pkl', '_performance.csv')
 
+print('\n🚩 Saving model and performance results...')
 joblib.dump(decoder, model_save_path)
 performance_df.to_csv(performance_csv_path, index=False)
 
 print(f'\n✅ Model saved: {model_save_path}')
 print(f'✅ Performance saved: {performance_csv_path}')
+
