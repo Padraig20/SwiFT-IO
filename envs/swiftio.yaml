@@ -119,3 +119,4 @@ dependencies:
     - websocket-client==1.6.2
     - wrapt==1.15.0
     - yarl==1.9.2
+    - wandb==0.19.10
