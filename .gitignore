@@ -18,6 +18,8 @@ src/wandb
 
 src/summary
 
+src/runs
+
 metadata
 
 tmp

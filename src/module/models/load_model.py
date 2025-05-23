@@ -1,4 +1,5 @@
 from .encoder.swin4d_transformer_ver7 import SwinTransformer4D
+from .encoder.swin4d_transformer_ver9 import SwinTransformer4D
 from .decoder.single_target_decoder import SingleTargetDecoder
 from .decoder.series_decoder import SeriesDecoder
 
@@ -22,6 +23,23 @@ def load_model(model_name, hparams=None):
     dims = h * w * d * t
         
     if model_name == "swin4d_ver7":
+        net = SwinTransformer4D(
+            img_size=hparams.img_size,
+            in_chans=hparams.in_chans,
+            embed_dim=hparams.embed_dim,
+            window_size=hparams.window_size,
+            first_window_size=hparams.first_window_size,
+            patch_size=hparams.patch_size,
+            depths=hparams.depths,
+            num_heads=hparams.num_heads,
+            c_multiplier=hparams.c_multiplier,
+            last_layer_full_MSA=hparams.last_layer_full_MSA,
+            to_float = to_float,
+            drop_rate=hparams.attn_drop_rate,
+            drop_path_rate=hparams.attn_drop_rate,
+            attn_drop_rate=hparams.attn_drop_rate
+        )
+    elif model_name == "swin4d_ver9":
         net = SwinTransformer4D(
             img_size=hparams.img_size,
             in_chans=hparams.in_chans,

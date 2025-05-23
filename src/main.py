@@ -137,6 +137,7 @@ def cli_main():
     # ------------ data -------------
     data_module = Dataset(**vars(args))
     pl.seed_everything(args.seed)
+    data_module.setup(stage='fit') # kimbo change
     
     
 
@@ -265,7 +266,7 @@ def cli_main():
             # Resume existing run
             trainer.fit(model, datamodule=data_module, ckpt_path=args.resume_ckpt_path)
 
-        trainer.test(model, dataloaders=data_module) # 여기서 Best ckpt를 가져와야함. 
+        trainer.test(model, dataloaders=data_module, ckpt_path="best") # 여기서 Best ckpt를 가져와야함. 
     
     if args.save_encoder:
         model.save_encoder(args.save_encoder)

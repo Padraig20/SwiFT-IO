@@ -5,6 +5,7 @@ from pathlib import Path
 from tqdm import tqdm
 import sys
 import argparse
+import pdb
 
 # CLI 인자 받기
 parser = argparse.ArgumentParser(description="Extract residuals from model predictions and save with frame info.")
@@ -12,7 +13,10 @@ parser.add_argument('--run_id', type=str, required=True, help='Run ID (e.g., cvy
 parser.add_argument('--input_type', type=str, choices=['movieDM', 'movieTP'], required=True, help='Input type')
 parser.add_argument('--seq_length', type=int, default=50, help='Sequence length (default: 50)')
 parser.add_argument('--input_offset', type=int, default=0, help='input offset (default: 0)')
-parser.add_argument('--dataset', type=str, choices=['test', 'whole'], default='whole', help='Dataset type to process (default: whole)')
+parser.add_argument('--dataset', type=str, choices=['train', 'val', 'test', 'whole'], default='whole', help='Dataset type to process (default: whole)')
+# --run_id tubg3tim --input_type movieDM --seq_length 50 --input_offset 3 --dataset test
+# --run_id tubg3tim --input_type movieDM --seq_length 50 --input_offset 3 --dataset val
+# --run_id tubg3tim --input_type movieDM --seq_length 50 --input_offset 3 --dataset train
 # --run_id tubg3tim --input_type movieDM --seq_length 50 --input_offset 3 --dataset whole
 args_cli = parser.parse_args()
 
@@ -53,10 +57,20 @@ ckpt['hyper_parameters']['bad_subj_path'] = None
 ckpt['hyper_parameters']['limit_training_samples'] = 0
 ckpt['hyper_parameters']['img_size'] = [96, 96, 96, seq_length]
 ckpt['hyper_parameters']['eval_num_workers'] = 1
+
 args = ckpt['hyper_parameters']
 
 # 데이터 모듈 초기화
 data_module = fMRIDataModule(**args)
+# pdb.set_trace()
+
+# custom_split_path = '/pscratch/sd/k/kimbo/SwiFT-IO/output/moviefmri/tubg3tim/split_fixed_1.txt'
+# custom_split_path = '/pscratch/sd/k/kimbo/kimbo_aica/kimbo/SwiFT-IO/data/splits/HBN/split_fixed_1.txt'
+# custom_split_path = '/pscratch/sd/k/kimbo/kimbo_aica/kimbo/SwiFT-IO/src/data/splits/HBN/split_fixed_1.txt'
+# custom_split_path = '/pscratch/sd/k/kimbo/SwiFT-IO/output/moviefmri/tubg3tim/labserver/split_fixed_1.txt'
+custom_split_path = '/pscratch/sd/k/kimbo/SwiFT-IO/tmp/7_checkpoint/kimbo_aica/split_fixed_1.txt'
+data_module.split_file_path = custom_split_path
+
 data_module.setup()
 data_module.prepare_data()
 
@@ -67,16 +81,25 @@ model.eval()
 model.cpu()
 
 # 결과 저장 경로
-save_dir = Path(f"/pscratch/sd/k/kimbo/SwiFT-IO/analysis/3_preds_plot/{run_id}")
+save_dir = Path(f"/pscratch/sd/k/kimbo/SwiFT-IO/analysis/residuals/{run_id}")
 save_dir.mkdir(parents=True, exist_ok=True)
 
 
 def save_predictions_and_residuals_with_split(model, data_module, save_dir, seq_length, input_offset=3, dataset_choice='whole'):
-    loaders = {'test': data_module.test_dataloader()} if dataset_choice == 'test' else {
-        'train': data_module.train_dataloader(),
-        'val': data_module.val_dataloader(),
-        'test': data_module.test_dataloader()
-    }
+    
+    # 여기서 데이터셋을 선택해서 처리할 수 있도록 변경
+    if dataset_choice == 'train':
+        loaders = {'train': data_module.train_dataloader()}
+    elif dataset_choice == 'val':
+        loaders = {'val': data_module.val_dataloader()}
+    elif dataset_choice == 'test':
+        loaders = {'test': data_module.test_dataloader()}
+    elif dataset_choice == 'whole':
+        loaders = {
+            'train': data_module.train_dataloader(),
+            'val': data_module.val_dataloader(),
+            'test': data_module.test_dataloader()
+        }
 
     rows = []
     segment_counter = {}
@@ -94,7 +117,7 @@ def save_predictions_and_residuals_with_split(model, data_module, save_dir, seq_
             input_ts = data['fmri_sequence'].float().cpu()
             target = data['target'].float().cpu()
 
-            with torch.no_grad():
+            with torch.no_grad(): 
                 pred = model(input_ts)
 
             residual = torch.abs(pred - target.squeeze(0))
