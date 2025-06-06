@@ -5,19 +5,13 @@ import pandas as pd
 from torch.utils.data import DataLoader
 from .datasets import Dummy, HBN
 from argparse import ArgumentParser, ArgumentDefaultsHelpFormatter
+from sklearn.model_selection import train_test_split
+from iterstrat.ml_stratifiers import MultilabelStratifiedShuffleSplit
 
 class fMRIDataModule(pl.LightningDataModule):
     def __init__(self, **kwargs):
         super().__init__()
         self.save_hyperparameters()
-
-        # generate splits folder
-        if self.hparams.pretraining:
-                split_dir_path = f'./data/splits/{self.hparams.dataset_name}/pretraining'
-        else:
-            split_dir_path = f'./data/splits/{self.hparams.dataset_name}'
-        os.makedirs(split_dir_path, exist_ok=True)
-        self.split_file_path = os.path.join(split_dir_path, f"split_fixed_{self.hparams.dataset_split_num}.txt")
         
         # self.setup() 
 
@@ -42,35 +36,61 @@ class fMRIDataModule(pl.LightningDataModule):
         test_idx = np.where(np.in1d(subj_idx, test_names))[0].tolist()
         return train_idx, val_idx, test_idx
     
-    def save_split(self, sets_dict):
-        with open(self.split_file_path, "w+") as f:
-            for name, subj_list in sets_dict.items():
-                f.write(name + "\n")
-                for subj_name in subj_list:
-                    f.write(str(subj_name) + "\n")
-                    
-    def determine_split_randomly(self, S):
-        S = list(S.keys())
-        S_train = int(len(S) * self.hparams.train_split)
-        S_val = int(len(S) * self.hparams.val_split)
-        S_train = np.random.choice(S, S_train, replace=False)
-        remaining = np.setdiff1d(S, S_train) # np.setdiff1d(np.arange(S), S_train)
-        S_val = np.random.choice(remaining, S_val, replace=False)
-        S_test = np.setdiff1d(S, np.concatenate([S_train, S_val])) # np.setdiff1d(np.arange(S), np.concatenate([S_train, S_val]))
-        # train_idx, val_idx, test_idx = self.convert_subject_list_to_idx_list(S_train, S_val, S_test, self.subject_list)
-        self.save_split({"train_subjects": S_train, "val_subjects": S_val, "test_subjects": S_test})
-        return S_train, S_val, S_test
-    
-    def load_split(self):
-        subject_order = open(self.split_file_path, "r").readlines()
-        subject_order = [x[:-1] for x in subject_order]
-        train_index = np.argmax(["train" in line for line in subject_order])
-        val_index = np.argmax(["val" in line for line in subject_order])
-        test_index = np.argmax(["test" in line for line in subject_order])
-        train_names = subject_order[train_index + 1 : val_index]
-        val_names = subject_order[val_index + 1 : test_index]
-        test_names = subject_order[test_index + 1 :]
-        return train_names, val_names, test_names
+    def determine_stratified_split(self, subject_dict, seed, stratified_params, metadata_csv_path,
+                                train_split_size=0.7, val_split_size=0.15):
+
+        df = pd.read_csv(metadata_csv_path)
+        df["SUBJECT_ID"] = df["SUBJECT_ID"].astype(str)
+        subject_ids = set(str(sid) for sid in subject_dict)
+        df = df[df["SUBJECT_ID"].isin(subject_ids)].copy()
+
+        if df.empty:
+            raise ValueError("No matching SUBJECT_IDs found in metadata.")
+
+        X = df["SUBJECT_ID"].values
+
+        val_test_split = 1.0 - train_split_size
+        test_size = (1.0 - train_split_size - val_split_size) / val_test_split
+
+        if not stratified_params:
+            train_ids, temp_ids = train_test_split(X, test_size=val_test_split, random_state=seed)
+            val_ids, test_ids = train_test_split(temp_ids, test_size=test_size, random_state=seed)
+            return train_ids.tolist(), val_ids.tolist(), test_ids.tolist()
+
+        Y = []
+        for col in stratified_params:
+            if np.issubdtype(df[col].dtype, np.number):
+                binned = pd.qcut(df[col], q=4, labels=False, duplicates='drop')  # bin continuous (4 quartiles)
+                Y.append(binned.values)
+            else:
+                encoded = pd.factorize(df[col])[0]  # encode categorical
+                Y.append(encoded)
+
+        Y = np.vstack(Y).T
+
+        if Y.shape[1] == 1:
+            # single-column stratification => sklearn
+            stratify_labels = Y[:, 0]
+            train_ids, temp_ids, _, temp_labels = train_test_split(
+                X, stratify_labels, test_size=val_test_split, random_state=seed, stratify=stratify_labels
+            )
+            val_ids, test_ids = train_test_split(
+                temp_ids, test_size=test_size, random_state=seed, stratify=temp_labels
+            )
+        else:
+            # multi-label stratification => iterative-stratification
+            msss = MultilabelStratifiedShuffleSplit(n_splits=1, test_size=val_test_split, random_state=seed)
+            train_idx, temp_idx = next(msss.split(X, Y))
+            X_temp, Y_temp = X[temp_idx], Y[temp_idx]
+
+            msss2 = MultilabelStratifiedShuffleSplit(n_splits=1, test_size=test_size, random_state=seed)
+            val_idx, test_idx = next(msss2.split(X_temp, Y_temp))
+
+            train_ids = X[train_idx]
+            val_ids = X_temp[val_idx]
+            test_ids = X_temp[test_idx]
+
+        return train_ids.tolist(), val_ids.tolist(), test_ids.tolist()
 
     def prepare_data(self):
         # This function is only called at global rank==0
@@ -156,11 +176,12 @@ class fMRIDataModule(pl.LightningDataModule):
                 "input_offset": self.hparams.input_offset} # kimbo change
         
         subject_dict = self.make_subject_dict()
-        if os.path.exists(self.split_file_path):
-            train_names, val_names, test_names = self.load_split()
-        else:
-            train_names, val_names, test_names = self.determine_split_randomly(subject_dict)
         
+        metadata_csv_path = "/scratch/connectome/kimbo/SwiFT-IO-4-v9/SwiFT-IO/data_behavior/split_fixed_1.w.Dx.csv"
+        # now split the data
+        train_names, val_names, test_names = self.determine_stratified_split(subject_dict, self.hparams.dataset_split_seed, self.hparams.stratified_params,
+                                                                             metadata_csv_path, self.hparams.train_split, self.hparams.val_split)
+                
         if self.hparams.bad_subj_path:
             bad_subjects = open(self.hparams.bad_subj_path, "r").readlines()
             for bad_subj in bad_subjects:
@@ -171,22 +192,6 @@ class fMRIDataModule(pl.LightningDataModule):
         
         if self.hparams.limit_training_samples:
             train_names = np.random.choice(train_names, size=self.hparams.limit_training_samples, replace=False, p=None)
-        
-        # train_dict = {key: subject_dict[key] for key in train_names if key in subject_dict}
-        # val_dict = {key: subject_dict[key] for key in val_names if key in subject_dict}
-        # test_dict = {key: subject_dict[key] for key in test_names if key in subject_dict}
-        
-        # self.train_dataset = Dataset(**params,subject_dict=train_dict,use_augmentations=False, train=True)
-        # # load train mean/std of target labels to val/test dataloader
-        # self.val_dataset = Dataset(**params,subject_dict=val_dict,use_augmentations=False,train=False) 
-        # self.test_dataset = Dataset(**params,subject_dict=test_dict,use_augmentations=False,train=False) 
-        
-        # print("number of train_subj:", len(train_dict))
-        # print("number of val_subj:", len(val_dict))
-        # print("number of test_subj:", len(test_dict))
-        # print("length of train_idx:", len(self.train_dataset.data))
-        # print("length of val_idx:", len(self.val_dataset.data))  
-        # print("length of test_idx:", len(self.test_dataset.data))
 
         def get_params(train):
                 return {
@@ -224,22 +229,7 @@ class fMRIDataModule(pl.LightningDataModule):
             self.test_dataset = Dataset(**params, subject_dict=test_dict, use_augmentations=False, train=False)
             self.test_loader = DataLoader(self.test_dataset, **get_params(train=False))
             print("number of test_subj:", len(test_dict))
-            print("length of test_idx:", len(self.test_dataset.data))
-
-        # DistributedSampler is internally called in pl.Trainer
-        # def get_params(train):
-        #     return {
-        #         "batch_size": self.hparams.batch_size if train else self.hparams.eval_batch_size,
-        #         "num_workers": self.hparams.num_workers,
-        #         "drop_last": True,
-        #         "pin_memory": False,
-        #         "persistent_workers": False if self.hparams.dataset_name == 'Dummy' else (train and (self.hparams.strategy == 'ddp')),
-        #         "shuffle": train
-        #     }
-        # self.train_loader = DataLoader(self.train_dataset, **get_params(train=True))
-        # self.val_loader = DataLoader(self.val_dataset, **get_params(train=False))
-        # self.test_loader = DataLoader(self.test_dataset, **get_params(train=False))
-        
+            print("length of test_idx:", len(self.test_dataset.data))        
 
     def train_dataloader(self):
         return self.train_loader
@@ -259,7 +249,11 @@ class fMRIDataModule(pl.LightningDataModule):
     def add_data_specific_args(cls, parent_parser: ArgumentParser, **kwargs) -> ArgumentParser:
         parser = ArgumentParser(parents=[parent_parser], add_help=True, formatter_class=ArgumentDefaultsHelpFormatter)
         group = parser.add_argument_group("DataModule arguments")
-        group.add_argument("--dataset_split_num", type=int, default=1) # dataset split, choose from 1, 2, or 3
+        
+        # dataset split parameters
+        group.add_argument("--dataset_split_seed", type=int, default=777)
+        group.add_argument("--stratified_params", nargs="+", default=None, type=str, help="stratified parameters for dataset split")
+        
         group.add_argument("--label_scaling_method", default="standardization", choices=["minmax","standardization"], help="label normalization strategy for a regression task (mean and std are automatically calculated using train set)")
         group.add_argument("--image_path", default=None, help="path to image datasets preprocessed for SwiFT")
         group.add_argument("--bad_subj_path", default=None, help="path to txt file that contains subjects with bad fMRI quality")
