@@ -73,6 +73,13 @@ def cli_main():
     parser.add_argument("--experiment_name", default=None, type=str, help="A name of the experiment (WandB)") # kimbo change
     parser.add_argument("--valid_only", action='store_true', help="disable running _evaluate_metrics(mode='test') at validation stage") # kimbo change
     parser.set_defaults(valid_only=False)  # kimbo change
+    # — Slurm 재실행 시 사용할 W&B resume 옵션
+    parser.add_argument("--resume", action="store_true",
+                         help="If set, resume from an existing W&B run ID and load latest checkpoint")
+    parser.add_argument("--run_id", type=str,
+                         help="(When --resume) 이전에 사용하던 W&B run ID를 문자열로 전달합니다.")
+
+
     
     temp_args, _ = parser.parse_known_args()
 
@@ -177,15 +184,31 @@ def cli_main():
         # run의 기타 특징들을 태그로 추가 가능
         # tags.extend(["in_production", "preemptible", "baseline"])
 
-        # W&B Logger 설정
-        logger = WandbLogger(
-            project=args.project_name,
-            name=args.experiment_name if hasattr(args, "experiment_name") else None,
-            config=vars(args),
-            save_dir=args.default_root_dir,  # 로그 저장 경로 설정
-            tags = tags
-        )
+        # ①: resume 플래그가 켜진 경우, run_id=이전 W&B run ID, resume="allow" 설정
+        if args.resume:
+            wandb_logger = WandbLogger(
+                project=args.project_name,
+                name=args.experiment_name,
+                id=args.run_id,                    # 반드시 이전 run_id를 넘겨야 합니다.
+                resume="allow",                    # 기존 run을 이어붙이겠다는 의미
+                config=vars(args),
+                save_dir=args.default_root_dir,
+                tags=tags
+            )
 
+        else: 
+            # ②: 새로 시작하는 경우, run_id=None, resume=None 설정
+            wandb_logger = WandbLogger(
+                project=args.project_name,
+                name=args.experiment_name if hasattr(args, "experiment_name") else None,
+                config=vars(args),
+                save_dir=args.default_root_dir,  # 로그 저장 경로 설정
+                tags=tags
+            )
+        
+        # Lightning에서 사용할 logger 객체로 교체
+        logger = wandb_logger
+        # run_id를 args.id로 저장(추후에 Slurm 재실행 시 --> --run_id <args.id> 로 넣을 수 있게)
         if exp_id is None:
             setattr(args, "id", logger.experiment.id)  # W&B Experiment ID 저장
         print(f"default_root_dir: {args.default_root_dir}") # output/moviefmri
@@ -258,24 +281,45 @@ def cli_main():
     # ------------ run -------------
     if args.test_only:
         trainer.test(model, datamodule=data_module, ckpt_path=args.test_ckpt_path) # dataloaders=data_module
+        return
+    
+    # → resume 플래그가 켜진 경우: W&B artifact에서 최신 checkpoint를 내려받아 이어서 학습
+    if args.resume:
+        # 1) W&B run 객체 가져오기 (resume="allow"로 이미 init함)
+        run = wandb.init(project=args.project_name, id=args.run_id, resume="allow")
+
+        # 2) Artifact에서 최신 체크포인트 다운로드
+        artifact = run.use_artifact(f'{args.project_name}/best_model:latest')
+        ckpt_dir = artifact.download()  
+        # 다운로드된 폴더 내에서 .ckpt 파일을 직접 찾아야 합니다.
+        # (예: “checkpt-xx-yy.zz.ckpt” 형태 파일이 ckpt_dir에 들어 있음)
+
+        # 3) 로컬 .ckpt 파일 경로 추출
+        #    – 폴더 이름이 여러 가지라면 glob.glob 또는 os.listdir을 사용해 .ckpt 확장자 파일을 찾아주세요.
+        import glob
+        ckpt_list = glob.glob(os.path.join(ckpt_dir, "*.ckpt"))
+        if len(ckpt_list) == 0:
+            raise FileNotFoundError(f"Download 된 checkpoint 파일을 찾을 수 없습니다: {ckpt_dir}")
+        latest_ckpt_path = ckpt_list[-1]  # 여러 개일 경우, 마지막(가장 최신) ckpt를 선택
+
+        # 4) 모델·optimizer state를 자동으로 Lightning이 불러올 수 있도록 Trainer에 전달
+        trainer.fit(model, datamodule=data_module, ckpt_path=latest_ckpt_path)
     else:
+        # 새로운 run 또는 일반 재시작(resume_ckpt_path만 있는 경우)
         if args.resume_ckpt_path is None:
-            # New run
             trainer.fit(model, datamodule=data_module)
         else:
-            # Resume existing run
             trainer.fit(model, datamodule=data_module, ckpt_path=args.resume_ckpt_path)
 
-        trainer.test(model, dataloaders=data_module, ckpt_path="best") # 여기서 Best ckpt를 가져와야함. 
-    
+    # 학습 끝난 뒤에는 test (best ckpt 사용)
+    trainer.test(model, dataloaders=data_module, ckpt_path="best")
+
     if args.save_encoder:
         model.save_encoder(args.save_encoder)
 
     # ✅ WandB 세션 종료
     if args.loggername == "wandb":
         wandb.finish()
-
-
 
 if __name__ == "__main__":
     cli_main()

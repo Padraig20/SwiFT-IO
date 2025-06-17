@@ -27,3 +27,5 @@ tmp
 analysis/results
 
 data_behavior
+
+wandb

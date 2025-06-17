@@ -177,7 +177,7 @@ class fMRIDataModule(pl.LightningDataModule):
         
         subject_dict = self.make_subject_dict()
         
-        metadata_csv_path = "/scratch/connectome/kimbo/SwiFT-IO-4-v9/SwiFT-IO/data_behavior/split_fixed_1.w.Dx.csv"
+        metadata_csv_path = "/pscratch/sd/k/kimbo/SwiFT-IO/data_behavior/split_fixed_1.w.Dx.csv"
         # now split the data
         train_names, val_names, test_names = self.determine_stratified_split(subject_dict, self.hparams.dataset_split_seed, self.hparams.stratified_params,
                                                                              metadata_csv_path, self.hparams.train_split, self.hparams.val_split)
