@@ -271,13 +271,33 @@ def cli_main():
         print(f'loading model from {args.load_model_path}')
         path = args.load_model_path
         ckpt = torch.load(path)
+        if 'state_dict' in ckpt:
+            ckpt = ckpt['state_dict']
         new_state_dict = OrderedDict()
-        for k, v in ckpt['state_dict'].items():
-            if 'model.' in k: #transformer-related layers
-                if not "head.weight" in k and not "head.bias" in k:
-                    new_state_dict[k.removeprefix("model.")] = v
-        model.model.swinViT.load_state_dict(new_state_dict)
 
+        for k, v in ckpt.items():
+            if 'model.' in k or '_forward_module.model.' in k:
+                clean_key = k
+                # 앞부분 prefix 제거
+                for prefix in ['model.', '_forward_module.model.']:
+                    if clean_key.startswith(prefix):
+                        clean_key = clean_key[len(prefix):]
+                if not "head.weight" in k and not "head.bias" in k:
+                    new_state_dict[clean_key] = v
+
+        load_result = model.model.load_state_dict(new_state_dict, strict=False)
+        print("=== Load State Dict Summary ===")
+        if load_result.missing_keys:
+            print("Missing keys (not loaded into model):")
+            for k in load_result.missing_keys:
+                print("  ", k)
+
+        if load_result.unexpected_keys:
+            print("Unexpected keys (in checkpoint but not in model):")
+            for k in load_result.unexpected_keys:
+                print("  ", k)
+
+        
     # ------------ run -------------
     if args.test_only:
         trainer.test(model, datamodule=data_module, ckpt_path=args.test_ckpt_path) # dataloaders=data_module
