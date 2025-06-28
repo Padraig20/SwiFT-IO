@@ -28,29 +28,59 @@ class CustomModelCheckpoint(ModelCheckpoint):
         print(f"현재 epoch: {trainer.current_epoch}, best model path: {self.best_model_path}")
         super().on_validation_epoch_end(trainer, pl_module)
 
-    def on_save_checkpoint(self, trainer, pl_module, checkpoint):
-        checkpoint_path = self.best_model_path  # 최고 성능 체크포인트 경로
-        print(f"Checkpoint path: {checkpoint_path}")
+    # def on_save_checkpoint(self, trainer, pl_module, checkpoint):
+    #     checkpoint_path = self.best_model_path  # 최고 성능 체크포인트 경로
+    #     print(f"Checkpoint path: {checkpoint_path}")
         
-        # Best performance metric (valid_acc or valid_mse)
-        best_metric = trainer.callback_metrics.get('valid_acc') if 'valid_acc' in trainer.callback_metrics else trainer.callback_metrics.get('valid_mse')
+    #     # Best performance metric (valid_acc or valid_mse)
+    #     best_metric = trainer.callback_metrics.get('valid_acc') if 'valid_acc' in trainer.callback_metrics else trainer.callback_metrics.get('valid_mse')
         
-        artifact = wandb.Artifact('best_model', type='model')
+    #     artifact = wandb.Artifact('best_model', type='model')
 
-        if os.path.isfile(checkpoint_path):
-            artifact.add_file(checkpoint_path)  # 체크포인트 파일 추가
+    #     if os.path.isfile(checkpoint_path):
+    #         artifact.add_file(checkpoint_path)  # 체크포인트 파일 추가
 
-            # Add metadata with performance metrics
-            artifact.metadata = {
-                'valid_acc': best_metric,  # valid_acc or valid_mse depending on task
-                'epoch': trainer.current_epoch
-            }
+    #         # Add metadata with performance metrics
+    #         artifact.metadata = {
+    #             'valid_acc': best_metric,  # valid_acc or valid_mse depending on task
+    #             'epoch': trainer.current_epoch
+    #         }
 
-            wandb.log_artifact(artifact)  # 아티팩트로 로깅
-        else:
-            print(f"Checkpoint path is not a valid file: {checkpoint_path}")
-        return super().on_save_checkpoint(trainer, pl_module, checkpoint)
+    #         wandb.log_artifact(artifact)  # 아티팩트로 로깅
+    #     else:
+    #         print(f"Checkpoint path is not a valid file: {checkpoint_path}")
+    #     return super().on_save_checkpoint(trainer, pl_module, checkpoint)
     
+    def on_save_checkpoint(self, trainer, pl_module, checkpoint):
+        pass
+        # checkpoint_path = self.best_model_path
+        # print(f"Checkpoint path: {checkpoint_path}")
+
+        # best_metric = trainer.callback_metrics.get('valid_acc') if 'valid_acc' in trainer.callback_metrics else trainer.callback_metrics.get('valid_mse')
+
+        # # ✅ wandb 세션이 시작됐는지 확인
+        # if wandb.run is None:
+        #     print("⚠️ wandb.init() not called. Skipping artifact logging.")
+        #     return
+
+        # if not trainer.is_global_zero:
+        #     print("⚠️ Not rank 0 — skipping wandb.log_artifact() to avoid DDP conflict.")
+        #     return
+
+        # artifact = wandb.Artifact('best_model', type='model')
+
+        # if os.path.isfile(checkpoint_path):
+        #     artifact.add_file(checkpoint_path)
+        #     artifact.metadata = {
+        #         'valid_acc': best_metric,
+        #         'epoch': trainer.current_epoch
+        #     }
+        #     wandb.log_artifact(artifact)
+        # else:
+        #     print(f"Checkpoint path is not a valid file: {checkpoint_path}")
+
+        # return super().on_save_checkpoint(trainer, pl_module, checkpoint)
+
     
 def cli_main():
 
@@ -78,6 +108,8 @@ def cli_main():
                          help="If set, resume from an existing W&B run ID and load latest checkpoint")
     parser.add_argument("--run_id", type=str,
                          help="(When --resume) 이전에 사용하던 W&B run ID를 문자열로 전달합니다.")
+    # loss function type
+    # parser.add_argument("--loss_type", type=str, default="mean_mse", choices=["mean_mse", "weighted_mse_norm", "weighted_mse_var", "weighted_mse_both"],help="choose the loss function for regression task. options: mean_mse, weighted_mse, weighted_mse_norm")
 
 
     

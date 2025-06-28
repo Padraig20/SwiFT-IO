@@ -184,34 +184,114 @@ class LitClassifier(pl.LightningModule):
             
         return subj, logits, target
     
+    # def _calculate_loss(self, batch, mode):
+    #     """
+    #     Calculates the loss and performance metrics for classification or regression tasks. 
+    #     Logs the results for monitoring during training or evaluation.
+    #     """
+    #     subj, logits, target = self._compute_logits(batch, augment_during_training = self.hparams.augment_during_training)
+
+    #     if self.hparams.downstream_task_type == 'classification':
+    #         if self.hparams.decoder == 'series_decoder': # [b, (t ta), c] -> [(b t ta), c]
+    #             logits = rearrange(logits, 'b tta c -> (b tta) c')
+    #             target = target.flatten() # (b,c) -> (b*c)
+    #         loss = F.cross_entropy(logits, target.long()) # target is float
+    #         acc = self.metric.get_accuracy(logits, target.float().squeeze())
+    #         result_dict = {
+    #             f"{mode}_loss": loss,
+    #             f"{mode}_acc": acc,
+    #         }
+
+    #     elif self.hparams.downstream_task_type == 'regression':
+    #         loss = F.mse_loss(logits.squeeze(), target.squeeze())
+    #         l1 = F.l1_loss(logits.squeeze(), target.squeeze())
+    #         result_dict = {
+    #             f"{mode}_loss": loss,
+    #             f"{mode}_mse": loss,
+    #             f"{mode}_l1_loss": l1
+    #         }
+    #     self.log_dict(result_dict, prog_bar=True, sync_dist=False, add_dataloader_idx=False, on_step=True, on_epoch=True, batch_size=self.hparams.batch_size)
+    #     return loss
+
     def _calculate_loss(self, batch, mode):
-        """
-        Calculates the loss and performance metrics for classification or regression tasks. 
-        Logs the results for monitoring during training or evaluation.
-        """
-        subj, logits, target = self._compute_logits(batch, augment_during_training = self.hparams.augment_during_training)
+        subj, logits, target = self._compute_logits(
+            batch, augment_during_training=self.hparams.augment_during_training, mode=mode
+        )
+
+        result_dict = {}
 
         if self.hparams.downstream_task_type == 'classification':
-            if self.hparams.decoder == 'series_decoder': # [b, (t ta), c] -> [(b t ta), c]
+            if self.hparams.decoder == 'series_decoder':
                 logits = rearrange(logits, 'b tta c -> (b tta) c')
-                target = target.flatten() # (b,c) -> (b*c)
-            loss = F.cross_entropy(logits, target.long()) # target is float
+                target = target.flatten()
+            loss = F.cross_entropy(logits, target.long())
             acc = self.metric.get_accuracy(logits, target.float().squeeze())
-            result_dict = {
+            result_dict.update({
                 f"{mode}_loss": loss,
                 f"{mode}_acc": acc,
-            }
+            })
 
         elif self.hparams.downstream_task_type == 'regression':
-            loss = F.mse_loss(logits.squeeze(), target.squeeze())
+            if self.hparams.decoder == 'series_decoder':
+                B, TE = logits.shape
+                E = self.hparams.num_targets
+                T = TE // E
+                logits = logits.view(B, T, E)
+                target = target.view(B, T, E)
+
+                loss_list = []
+
+                # 시간 가중치 (선택적으로 적용)
+                if "weighted_mse" in self.hparams.loss_type:
+                    if self.hparams.loss_type == "weighted_mse_norm":
+                        salience = torch.norm(target, dim=2, keepdim=True)
+                    elif self.hparams.loss_type == "weighted_mse_var":
+                        salience = torch.var(target, dim=2, keepdim=True)
+                    elif self.hparams.loss_type == "weighted_mse_both":
+                        norm = torch.norm(target, dim=2, keepdim=True)
+                        var = torch.var(target, dim=2, keepdim=True)
+                        salience = 0.5 * norm + 0.5 * var
+                    else:
+                        raise ValueError(f"Unknown weighted loss_type: {self.hparams.loss_type}")
+
+                    temporal_weight = salience / (salience.max() + 1e-6)
+                    temporal_weight = temporal_weight.detach()
+                else:
+                    temporal_weight = None
+
+                for i in range(E):
+                    error = (logits[:, :, i] - target[:, :, i]) ** 2
+                    if temporal_weight is not None:
+                        weighted_error = error * temporal_weight.squeeze(-1)
+                        mse_i = weighted_error.mean()
+                    else:
+                        mse_i = error.mean()
+
+                    result_dict[f"{mode}_mse_emotion_{i}"] = mse_i
+                    loss_list.append(mse_i)
+
+                loss = sum(loss_list) / E
+            else:
+                loss = F.mse_loss(logits.squeeze(), target.squeeze())
+                result_dict[f"{mode}_mse"] = loss
+
             l1 = F.l1_loss(logits.squeeze(), target.squeeze())
-            result_dict = {
-                f"{mode}_loss": loss,
-                f"{mode}_mse": loss,
-                f"{mode}_l1_loss": l1
-            }
-        self.log_dict(result_dict, prog_bar=True, sync_dist=False, add_dataloader_idx=False, on_step=True, on_epoch=True, batch_size=self.hparams.batch_size)
+            result_dict[f"{mode}_loss"] = loss
+            result_dict[f"{mode}_l1_loss"] = l1
+
+        self.log_dict(
+            result_dict,
+            prog_bar=True,
+            sync_dist=False,
+            add_dataloader_idx=False,
+            on_step=True,
+            on_epoch=True,
+            batch_size=self.hparams.batch_size
+        )
+
         return loss
+
+
 
     def _evaluate_metrics(self, subj_array, total_out, mode, best=False):
         """
@@ -627,4 +707,11 @@ class LitClassifier(pl.LightningModule):
         group.add_argument("--decoder", type=str, default="single_target_decoder", help="Which decoder to use: (i) single_target_decoder - predict a single value via regression or classification | (ii) series_decoder: predict a series of values (one per timeframe) via regression")
         group.add_argument("--num_targets", type=int, default=7, help="Number of targets to predict in series_decoder")
         # parser.add_argument("--valid_only", action='store_true', help="disable running _evaluate_metrics(mode='test') at validation stage") # kimbo change
+
+        # loss related
+        group.add_argument("--loss_type", type=str, default="mean_mse",
+                   choices=["mean_mse", "weighted_mse_norm", "weighted_mse_var", "weighted_mse_both"],
+                   help="Loss function type for series decoder: basic or weighted")
+
+
         return parser
