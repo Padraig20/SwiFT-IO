@@ -264,7 +264,7 @@ class fMRIDataModule(pl.LightningDataModule):
         group.add_argument("--eval_batch_size", type=int, default=16)
         group.add_argument("--img_size", nargs="+", default=[96, 96, 96, 20], type=int, help="image size (adjust the fourth dimension according to your --sequence_length argument)")
         group.add_argument("--sequence_length", type=int, default=20)
-        group.add_argument("--stride_between_seq", type=int, default=1, help="skip some fMRI volumes between fMRI sub-sequences")
+        group.add_argument("--stride_between_seq", type=float, default=1.0, help="Fractional stride (0.5 = 50% overlap between sequences). Will be multiplied by sample_duration and rounded internally.")
         group.add_argument("--stride_within_seq", type=int, default=1, help="skip some fMRI volumes within fMRI sub-sequences")
         group.add_argument("--num_workers", type=int, default=8)
         group.add_argument("--with_voxel_norm", action='store_true')

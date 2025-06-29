@@ -14,44 +14,28 @@ from module.utils.data_module import fMRIDataModule
 from module.pl_classifier import LitClassifier
 import wandb
 from pytorch_lightning.loggers.wandb import WandbLogger
+from wandb.sdk.wandb_run import Run
+from pytorch_lightning.callbacks import ModelCheckpoint
+from pytorch_lightning.utilities.rank_zero import rank_zero_only
 
+ 
 
 import wandb
 from pytorch_lightning.callbacks import ModelCheckpoint
+
 
 class CustomModelCheckpoint(ModelCheckpoint):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
     def on_validation_epoch_end(self, trainer, pl_module):
-        # 검증 종료 후에 실행되는 부분
         print(f"현재 epoch: {trainer.current_epoch}, best model path: {self.best_model_path}")
         super().on_validation_epoch_end(trainer, pl_module)
 
+    @rank_zero_only
     def on_save_checkpoint(self, trainer, pl_module, checkpoint):
-        checkpoint_path = self.best_model_path  # 최고 성능 체크포인트 경로
-        print(f"Checkpoint path: {checkpoint_path}")
-        
-        # Best performance metric (valid_acc or valid_mse)
-        best_metric = trainer.callback_metrics.get('valid_acc') if 'valid_acc' in trainer.callback_metrics else trainer.callback_metrics.get('valid_mse')
-        
-        artifact = wandb.Artifact('best_model', type='model')
+        pass
 
-        if os.path.isfile(checkpoint_path):
-            artifact.add_file(checkpoint_path)  # 체크포인트 파일 추가
-
-            # Add metadata with performance metrics
-            artifact.metadata = {
-                'valid_acc': best_metric,  # valid_acc or valid_mse depending on task
-                'epoch': trainer.current_epoch
-            }
-
-            wandb.log_artifact(artifact)  # 아티팩트로 로깅
-        else:
-            print(f"Checkpoint path is not a valid file: {checkpoint_path}")
-        return super().on_save_checkpoint(trainer, pl_module, checkpoint)
-    
-    
 def cli_main():
 
     # ------------ args -------------
@@ -311,11 +295,21 @@ def cli_main():
         # 2) Artifact에서 최신 체크포인트 다운로드
         artifact = run.use_artifact(f'{args.project_name}/best_model:latest')
         ckpt_dir = artifact.download()  
-        # 다운로드된 폴더 내에서 .ckpt 파일을 직접 찾아야 합니다.
-        # (예: “checkpt-xx-yy.zz.ckpt” 형태 파일이 ckpt_dir에 들어 있음)
 
-        # 3) 로컬 .ckpt 파일 경로 추출
-        #    – 폴더 이름이 여러 가지라면 glob.glob 또는 os.listdir을 사용해 .ckpt 확장자 파일을 찾아주세요.
+        # 3) 모델 구조 복원을 위한 args.json 또는 config.yaml 확인
+        import json
+        config_path = os.path.join(ckpt_dir, "config.json")  # or args.json, hparams.yaml
+        if os.path.exists(config_path):
+            with open(config_path, "r") as f:
+                ckpt_config = json.load(f)
+            print("[Resume] Loaded config from artifact:")
+            for k, v in ckpt_config.items():
+                if not hasattr(args, k):
+                    setattr(args, k, v)
+        else:
+            print("[Resume Warning] No config.json found in artifact.")
+
+        # 4) 로컬 .ckpt 파일 경로 추출
         import glob
         ckpt_list = glob.glob(os.path.join(ckpt_dir, "*.ckpt"))
         if len(ckpt_list) == 0:

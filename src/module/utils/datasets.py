@@ -108,7 +108,8 @@ class HBN(BaseDataset):
                                 input_start_frame,
                                 self.sample_duration,
                                 num_frames,
-                                target[output_start_frame:min(output_start_frame+self.sample_duration,num_frames)],
+                                # target[output_start_frame:min(output_start_frame+self.sample_duration,num_frames)],
+                                target[output_start_frame : min(output_start_frame + self.sample_duration, num_frames) : self.stride_within_seq],
                                 sex)
                 elif self.decoder == 'single_target_decoder':
                     data_tuple = (i,
