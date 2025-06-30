@@ -88,6 +88,11 @@ class LitClassifier(pl.LightningModule):
                 normalized_target_values = scaler.fit_transform(target_values)
                 print(f'target_max:{scaler.data_max_[0]},target_min:{scaler.data_min_[0]}')
             self.scaler = scaler
+            # target_values가 정규화되었는지 확인
+            print("Normalized target 확인 (평균, 표준편차):")
+            print("mean:", normalized_target_values.mean(axis=0))
+            print("std:", normalized_target_values.std(axis=0))
+
         else:
             print("⚠️ No train_dataset provided — skipping target normalization")
             self.scaler = None  # fallback: not used
@@ -241,8 +246,8 @@ class LitClassifier(pl.LightningModule):
 
                 loss_list = []
 
-                # 시간 가중치 (선택적으로 적용)
-                if "weighted_mse" in self.hparams.loss_type:
+                # optional salience-based temporal weighting
+                if self.hparams.loss_type in ["weighted_mse_norm", "weighted_mse_var", "weighted_mse_both"]:
                     if self.hparams.loss_type == "weighted_mse_norm":
                         salience = torch.norm(target, dim=2, keepdim=True)
                     elif self.hparams.loss_type == "weighted_mse_var":
@@ -251,13 +256,18 @@ class LitClassifier(pl.LightningModule):
                         norm = torch.norm(target, dim=2, keepdim=True)
                         var = torch.var(target, dim=2, keepdim=True)
                         salience = 0.5 * norm + 0.5 * var
-                    else:
-                        raise ValueError(f"Unknown weighted loss_type: {self.hparams.loss_type}")
-
                     temporal_weight = salience / (salience.max() + 1e-6)
                     temporal_weight = temporal_weight.detach()
                 else:
                     temporal_weight = None
+
+                # 감정별 가중치 전략 준비
+                if self.hparams.loss_type == 'learnable_weighted_mse':
+                    if not hasattr(self, 'loss_weights'):
+                        self.loss_weights = torch.nn.Parameter(torch.ones(E))
+                elif self.hparams.loss_type == 'uncertainty_weighted_mse':
+                    if not hasattr(self, 'log_vars'):
+                        self.log_vars = torch.nn.Parameter(torch.zeros(E))
 
                 for i in range(E):
                     error = (logits[:, :, i] - target[:, :, i]) ** 2
@@ -267,10 +277,20 @@ class LitClassifier(pl.LightningModule):
                     else:
                         mse_i = error.mean()
 
+                    if self.hparams.loss_type == 'learnable_weighted_mse':
+                        mse_i = self.loss_weights[i] * mse_i
+                    elif self.hparams.loss_type == 'uncertainty_weighted_mse':
+                        precision = torch.exp(-self.log_vars[i])
+                        mse_i = precision * mse_i + self.log_vars[i]
+                    # mean_mse나 weighted_mse_*의 경우는 추가 가중치 없음
+
                     result_dict[f"{mode}_mse_emotion_{i}"] = mse_i
                     loss_list.append(mse_i)
 
+                # 기본 평균 MSE 또는 전략별 결과
                 loss = sum(loss_list) / E
+                result_dict[f"{mode}_mse"] = loss
+
             else:
                 loss = F.mse_loss(logits.squeeze(), target.squeeze())
                 result_dict[f"{mode}_mse"] = loss
@@ -290,7 +310,6 @@ class LitClassifier(pl.LightningModule):
         )
 
         return loss
-
 
 
     def _evaluate_metrics(self, subj_array, total_out, mode, best=False):
@@ -710,7 +729,7 @@ class LitClassifier(pl.LightningModule):
 
         # loss related
         group.add_argument("--loss_type", type=str, default="mean_mse",
-                   choices=["mean_mse", "weighted_mse_norm", "weighted_mse_var", "weighted_mse_both"],
+                   choices=["mean_mse", "weighted_mse_norm", "weighted_mse_var", "weighted_mse_both", "learnable_weighted_mse", "uncertainty_weighted_mse"],
                    help="Loss function type for series decoder: basic or weighted")
 
 
