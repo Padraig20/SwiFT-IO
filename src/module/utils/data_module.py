@@ -7,15 +7,12 @@ from .datasets import Dummy, HBN
 from argparse import ArgumentParser, ArgumentDefaultsHelpFormatter
 from sklearn.model_selection import train_test_split
 from iterstrat.ml_stratifiers import MultilabelStratifiedShuffleSplit
+import pdb
 
 class fMRIDataModule(pl.LightningDataModule):
     def __init__(self, **kwargs):
         super().__init__()
         self.save_hyperparameters()
-        
-        # self.setup() 
-
-        #pl.seed_everything(seed=self.hparams.data_seed)
 
     def get_dataset(self):
         if self.hparams.dataset_name == "Dummy":
@@ -35,10 +32,29 @@ class fMRIDataModule(pl.LightningDataModule):
         val_idx = np.where(np.in1d(subj_idx, val_names))[0].tolist()
         test_idx = np.where(np.in1d(subj_idx, test_names))[0].tolist()
         return train_idx, val_idx, test_idx
-    
+
     def determine_stratified_split(self, subject_dict, seed, stratified_params, metadata_csv_path,
                                 train_split_size=0.7, val_split_size=0.15):
+    
+        # ✅ split 파일명 구성 및 저장 경로 변경 (고정 경로 사용)
+        stratified_tag = "_".join(stratified_params) if stratified_params else "no_stratify"
+        save_dir = os.path.join(os.getcwd(), "data", "splits")  # 📁 프로젝트 루트 기준
+        os.makedirs(save_dir, exist_ok=True)
+        save_name = f"split_seed{seed}_{stratified_tag}.csv"
+        save_path = os.path.join(save_dir, save_name)
 
+        self.split_name = save_name  
+
+        # ✅ 기존 파일이 있으면 load
+        if os.path.exists(save_path):
+            print(f"📂 Loading precomputed subject split from {save_path}")
+            df_split = pd.read_csv(save_path)
+            train_ids = df_split[df_split["split"] == "train"]["SUBJECT_ID"].tolist()
+            val_ids = df_split[df_split["split"] == "val"]["SUBJECT_ID"].tolist()
+            test_ids = df_split[df_split["split"] == "test"]["SUBJECT_ID"].tolist()
+            return train_ids, val_ids, test_ids
+
+        # ✅ stratified split 계산
         df = pd.read_csv(metadata_csv_path)
         df["SUBJECT_ID"] = df["SUBJECT_ID"].astype(str)
         subject_ids = set(str(sid) for sid in subject_dict)
@@ -48,49 +64,52 @@ class fMRIDataModule(pl.LightningDataModule):
             raise ValueError("No matching SUBJECT_IDs found in metadata.")
 
         X = df["SUBJECT_ID"].values
-
         val_test_split = 1.0 - train_split_size
         test_size = (1.0 - train_split_size - val_split_size) / val_test_split
 
         if not stratified_params:
             train_ids, temp_ids = train_test_split(X, test_size=val_test_split, random_state=seed)
             val_ids, test_ids = train_test_split(temp_ids, test_size=test_size, random_state=seed)
-            return train_ids.tolist(), val_ids.tolist(), test_ids.tolist()
-
-        Y = []
-        for col in stratified_params:
-            if np.issubdtype(df[col].dtype, np.number):
-                binned = pd.qcut(df[col], q=4, labels=False, duplicates='drop')  # bin continuous (4 quartiles)
-                Y.append(binned.values)
-            else:
-                encoded = pd.factorize(df[col])[0]  # encode categorical
-                Y.append(encoded)
-
-        Y = np.vstack(Y).T
-
-        if Y.shape[1] == 1:
-            # single-column stratification => sklearn
-            stratify_labels = Y[:, 0]
-            train_ids, temp_ids, _, temp_labels = train_test_split(
-                X, stratify_labels, test_size=val_test_split, random_state=seed, stratify=stratify_labels
-            )
-            val_ids, test_ids = train_test_split(
-                temp_ids, test_size=test_size, random_state=seed, stratify=temp_labels
-            )
         else:
-            # multi-label stratification => iterative-stratification
-            msss = MultilabelStratifiedShuffleSplit(n_splits=1, test_size=val_test_split, random_state=seed)
-            train_idx, temp_idx = next(msss.split(X, Y))
-            X_temp, Y_temp = X[temp_idx], Y[temp_idx]
+            Y = []
+            for col in stratified_params:
+                if np.issubdtype(df[col].dtype, np.number):
+                    binned = pd.qcut(df[col], q=4, labels=False, duplicates='drop')
+                    Y.append(binned.values)
+                else:
+                    encoded = pd.factorize(df[col])[0]
+                    Y.append(encoded)
+            Y = np.vstack(Y).T
 
-            msss2 = MultilabelStratifiedShuffleSplit(n_splits=1, test_size=test_size, random_state=seed)
-            val_idx, test_idx = next(msss2.split(X_temp, Y_temp))
+            if Y.shape[1] == 1:
+                stratify_labels = Y[:, 0]
+                train_ids, temp_ids, _, temp_labels = train_test_split(
+                    X, stratify_labels, test_size=val_test_split, random_state=seed, stratify=stratify_labels
+                )
+                val_ids, test_ids = train_test_split(
+                    temp_ids, test_size=test_size, random_state=seed, stratify=temp_labels
+                )
+            else:
+                msss = MultilabelStratifiedShuffleSplit(n_splits=1, test_size=val_test_split, random_state=seed)
+                train_idx, temp_idx = next(msss.split(X, Y))
+                X_temp, Y_temp = X[temp_idx], Y[temp_idx]
 
-            train_ids = X[train_idx]
-            val_ids = X_temp[val_idx]
-            test_ids = X_temp[test_idx]
+                msss2 = MultilabelStratifiedShuffleSplit(n_splits=1, test_size=test_size, random_state=seed)
+                val_idx, test_idx = next(msss2.split(X_temp, Y_temp))
 
-        return train_ids.tolist(), val_ids.tolist(), test_ids.tolist()
+                train_ids = list(X[train_idx])
+                val_ids = list(X_temp[val_idx])
+                test_ids = list(X_temp[test_idx])
+
+        # ✅ split 저장
+        split_df = pd.DataFrame({
+            "SUBJECT_ID": list(train_ids) + list(val_ids) + list(test_ids),
+            "split": ["train"] * len(train_ids) + ["val"] * len(val_ids) + ["test"] * len(test_ids)
+        })
+        split_df.to_csv(save_path, index=False)
+        print(f"✅ Subject split saved to: {save_path}")
+
+        return train_ids, val_ids, test_ids
 
     def prepare_data(self):
         # This function is only called at global rank==0
@@ -106,23 +125,40 @@ class fMRIDataModule(pl.LightningDataModule):
             emotions = ['Anger', 'Happy', 'Fear', 'Sad', 'Excited', 'Positive', 'Negative']
             contents = ['Closeup', 'Body', 'Face', 'NumberCharacters', 'SpokenWords', 'WrittenWords']
             features = ['Brightness', 'SaliencyFraction', 'Sharpness', 'Vibrance', 'Loudness', 'Motion', 'Tempo', 'LowLevelChange']
-
-            if self.hparams.decoder == 'single_target_decoder':
-                if self.hparams.downstream_task == 'sex': task_name = 'sex'
-                elif self.hparams.downstream_task == 'age': task_name = 'age'
-                else: raise ValueError('downstream task not supported')
-                
-                meta_data = pd.read_csv(os.path.join(self.hparams.image_path, "metadata", "HBN_metadata_240501_CJB.csv"))
-                if task_name == 'sex':
+            if self.hparams.decoder == 'single_target_scalar':
+                if self.hparams.downstream_task == 'sex': 
+                    task_name = 'sex'
+                    meta_data = pd.read_csv(os.path.join(self.hparams.image_path, "metadata", "HBN_metadata_240501_CJB.csv"))
                     meta_task = meta_data[['SUBJECT_ID',task_name]].dropna()
-                else:
-                    meta_task = meta_data[['SUBJECT_ID',task_name,'sex']].dropna()
+                    for subject in os.listdir(img_root):
+                        if subject in meta_task['SUBJECT_ID'].values:
+                            target = meta_task[meta_task["SUBJECT_ID"]==subject][task_name].values[0]
+                            sex = meta_task[meta_task["SUBJECT_ID"]==subject]["sex"].values[0]
+                            final_dict[subject]=[sex,target]
 
-                for subject in os.listdir(img_root):
-                    if subject in meta_task['SUBJECT_ID'].values:
-                        target = meta_task[meta_task["SUBJECT_ID"]==subject][task_name].values[0]
-                        sex = meta_task[meta_task["SUBJECT_ID"]==subject]["sex"].values[0]
-                        final_dict[subject]=[sex,target]
+                elif self.hparams.downstream_task == 'age': 
+                    task_name = 'age'
+                    meta_data = pd.read_csv(os.path.join(self.hparams.image_path, "metadata", "HBN_metadata_240501_CJB.csv"))
+                    meta_task = meta_data[['SUBJECT_ID',task_name,'sex']].dropna()
+                    for subject in os.listdir(img_root):
+                        if subject in meta_task['SUBJECT_ID'].values:
+                            target = meta_task[meta_task["SUBJECT_ID"]==subject][task_name].values[0]
+                            sex = meta_task[meta_task["SUBJECT_ID"]==subject]["sex"].values[0]
+                            final_dict[subject]=[sex,target]
+                else: raise ValueError('downstream task not supported')
+
+            elif self.hparams.decoder == 'single_target_multitask':
+                if self.hparams.downstream_task == 'emotions': 
+                    task_name = emotions
+                    task_name = [x + "_conv" for x in task_name]  # kimbo change
+                    meta_data = pd.read_csv("/pscratch/sd/k/kimbo/SwiFT-IO/metadata/DespicableMe_summary_codes_1.2Hz_intuitivenames_260120.csv") # TODO change later
+                    meta_task = meta_data[task_name + ['frame']].dropna() 
+                    for subject in os.listdir(img_root):
+                        sex = 1 # arbitrary value, not used
+                        target = meta_task[task_name].values
+                        target = target[np.argsort(meta_task['frame'].values)]
+                        final_dict[subject] = (sex, target)
+                else: raise ValueError('downstream task not supported')
 
             elif self.hparams.decoder == 'series_decoder':
                 if self.hparams.downstream_task == 'emotions': task_name = emotions
@@ -144,9 +180,8 @@ class fMRIDataModule(pl.LightningDataModule):
                     
                 elif self.hparams.input_type == 'movieTP':
                     meta_data = pd.read_csv("/pscratch/sd/k/kimbo/SwiFT-IO/metadata/ThePresent_summary_codes_1.2Hz_intuitivenames_260120.csv")
-                meta_task = meta_data[task_name + ['frame']].dropna() 
                 
-
+                meta_task = meta_data[task_name + ['frame']].dropna() 
                 for subject in os.listdir(img_root):
                         sex = 1 # arbitrary value, not used
                         target = meta_task[task_name].values
@@ -209,6 +244,8 @@ class fMRIDataModule(pl.LightningDataModule):
             train_dict = {key: subject_dict[key] for key in train_names if key in subject_dict}
             val_dict = {key: subject_dict[key] for key in val_names if key in subject_dict}
             test_dict = {key: subject_dict[key] for key in test_names if key in subject_dict}
+
+            decoder = self.hparams.decoder if hasattr(self, 'hparams') else params.get('decoder', 'series_decoder')
 
             self.train_dataset = Dataset(**params, subject_dict=train_dict, use_augmentations=False, train=True)
             self.val_dataset = Dataset(**params, subject_dict=val_dict, use_augmentations=False, train=False)

@@ -31,3 +31,9 @@ data_behavior
 wandb
 
 artifacts
+
+performance_table
+
+src/250704_loss_indiv.ipynb
+src/250704_loss.ipynb
+src/250706_loss.ipynb

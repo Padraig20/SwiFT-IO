@@ -1,5 +1,4 @@
 from typing import Optional
-
 import torch.nn as nn
 
 from module.models.decoder.backend.adapter import ClassificationOutputAdapter, TrainableQueryProvider
@@ -11,6 +10,7 @@ class SingleTargetDecoder(nn.Module):
                  num_latents: int,
                  num_latent_channels: int,
                  activation_checkpointing: bool = False,
+                 
                  # Decoder specific
                  activation_offloading: bool = False,
                  num_cross_attention_heads: int = 8,
@@ -20,22 +20,25 @@ class SingleTargetDecoder(nn.Module):
                  cross_attention_residual: bool = True,
                  dropout: float = 0.0,
                  init_scale: float = 0.02,
-                 # Classification specific
+                 
+                 # Output target dimension
+                 num_targets: int = 1,  # ✅ default: scalar regression
                  num_output_queries: int = 1,
                  num_output_query_channels: int = 256,
-                 num_classes: int = 100 # set to 1 for regression
                  ):
         super().__init__()
-        
+
         output_query_provider = TrainableQueryProvider(
-            num_queries=1,
+            num_queries=num_output_queries,
             num_query_channels=num_output_query_channels,
             init_scale=init_scale,
         )
+
         output_adapter = ClassificationOutputAdapter(
-            num_classes=num_classes,
+            num_classes=num_targets,  # ✅ 핵심 변경
             num_output_query_channels=num_output_query_channels,
         )
+
         self.decoder = PerceiverDecoder(
             output_adapter=output_adapter,
             output_query_provider=output_query_provider,
@@ -51,4 +54,4 @@ class SingleTargetDecoder(nn.Module):
         )
 
     def forward(self, x):
-        return self.decoder(x) # x expected to be a tensor of shape (batch_size, num_latents, num_latent_channels)
+        return self.decoder(x)

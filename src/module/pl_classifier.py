@@ -24,56 +24,56 @@ from sklearn.preprocessing import StandardScaler, MinMaxScaler
 import wandb 
 import copy
 import pdb
+import sys
+import torch
+import torch.nn.functional as F
+import numpy as np
+from sklearn.metrics import accuracy_score, balanced_accuracy_score, roc_auc_score
+from sklearn.preprocessing import label_binarize
+from einops import rearrange
+from torchmetrics import R2Score, PearsonCorrCoef
+from torchmetrics.regression import ConcordanceCorrCoef
+from torchmetrics.functional import concordance_corrcoef
+
+
+
+sys.path.append('/global/cfs/cdirs/m4750/kimbo/pytorch-softdtw-cuda')
+from soft_dtw_cuda import SoftDTW
+
 class LitClassifier(pl.LightningModule):
     
     def __init__(self,data_module, **kwargs):
         super().__init__()
-        self.data_module = data_module  # Pickle 불가능한 객체는 직접 저장
 
-        # ✅ 1. Pickle 불가능한 객체 필터링 함수
-        def is_pickleable(v):
-            try:
-                copy.deepcopy(v)  # Pickle 가능 여부 테스트
-                return True
-            except Exception:
-                return False
+         # ✅ 1. 하이퍼파라미터 먼저 안전하게 저장
+        self.data_module = data_module
 
-        # ✅ 2. `data_module`과 None 값 제거
-        hparams = {k: v for k, v in kwargs.items() if k != "data_module" and v is not None}
+        base_hparams = self._filter_hparams(data_module, kwargs)
+        base_hparams.setdefault("derivative_lambda", kwargs.get("derivative_lambda", 0.1))
+        base_hparams.setdefault("softdtw_lambda", kwargs.get("softdtw_lambda", 0.1))
+        base_hparams.setdefault("softdtw_gamma",  kwargs.get("softdtw_gamma", 0.05))
+        base_hparams.setdefault("ccc_lambda",     kwargs.get("ccc_lambda", 0.1))
+        base_hparams.setdefault("efdm_lambda", kwargs.get("efdm_lambda", 1.0))
 
-        # ✅ 3. wandb 같은 Pickle 불가능한 객체 제거
-        hparams = {k: v for k, v in hparams.items() if not isinstance(v, wandb.sdk.wandb_run.Run)}
+        self.save_hyperparameters(base_hparams)
 
-        # ✅ 4. `id` 필드 문자열 변환 (Pickle 가능하게 처리)
-        if "id" in hparams:
-            hparams["id"] = str(hparams["id"])  # Pickle 가능하도록 변환
+        # ✅ 2. 이제 self.hparams.xxx 접근 가능
+        self.loss_weights = torch.nn.Parameter(
+            torch.ones(self.hparams.num_targets), requires_grad=False
+        )
+        self.log_vars = torch.nn.Parameter(
+            torch.zeros(self.hparams.num_targets), requires_grad=False
+        )
 
-        # ✅ 5. DDP 환경에서만 Pickle 검증 수행
-        if torch.cuda.device_count() > 1:
-            remove_keys = []  # Pickle 불가능한 값들을 저장할 리스트
-            for k, v in hparams.items():
-                if not is_pickleable(v):
-                    print(f"❌ Pickle 불가능한 값 (DDP에서 오류 가능): {k} -> {type(v)} 제거됨")
-                    remove_keys.append(k)  # 삭제할 키 저장
+        if self.hparams.loss_type in [
+            'learnable_weighted_mse',
+            'intensity_learnable_weighted_mse',
+            'log_intensity_learnable_weighted_mse',
+            'normalized_intensity_learnable_weighted_mse']:
+            self.loss_weights.requires_grad = True
 
-            # ✅ 한꺼번에 삭제 (딕셔너리 변경 중 반복 방지)
-            for k in remove_keys:
-                del hparams[k]
-
-        # ✅ 6. 안전한 값만 `save_hyperparameters()`에 전달
-        self.save_hyperparameters(hparams)
-
-        # # you should define target_values at the Dataset classes
-        # target_values = data_module.train_dataset.target_values
-        # if self.hparams.label_scaling_method == 'standardization':
-        #     scaler = StandardScaler()
-        #     normalized_target_values = scaler.fit_transform(target_values)
-        #     print(f'target_mean:{scaler.mean_[0]}, target_std:{scaler.scale_[0]}')
-        # elif self.hparams.label_scaling_method == 'minmax': 
-        #     scaler = MinMaxScaler()
-        #     normalized_target_values = scaler.fit_transform(target_values)
-        #     print(f'target_max:{scaler.data_max_[0]},target_min:{scaler.data_min_[0]}')
-        # self.scaler = scaler
+        elif self.hparams.loss_type == 'uncertainty_weighted_mse':
+            self.log_vars.requires_grad = True
 
         # you should define target_values at the Dataset classes
         if data_module and hasattr(data_module, "train_dataset"):
@@ -100,13 +100,49 @@ class LitClassifier(pl.LightningModule):
 
         print(self.hparams.model)
         self.model = load_model(self.hparams.model, self.hparams)
-        
         self.output_head = load_model(self.hparams.decoder, self.hparams)
-
         self.metric = Metrics()
-
         self.valid_only = kwargs.get("valid_only", False) # kimbo change
 
+    def _filter_hparams(self, data_module, kwargs):
+        import copy
+        import wandb
+
+        def is_pickleable(v):
+            try:
+                copy.deepcopy(v)
+                return True
+            except Exception:
+                return False
+
+        # ✅ 1. data_module과 None 제거
+        hparams = {
+            k: v for k, v in kwargs.items()
+            if k != "data_module" and v is not None
+        }
+
+        # ✅ 2. wandb 객체 제거
+        hparams = {
+            k: v for k, v in hparams.items()
+            if not isinstance(v, wandb.sdk.wandb_run.Run)
+        }
+
+        # ✅ 3. id 필드 문자열화
+        if "id" in hparams:
+            hparams["id"] = str(hparams["id"])
+
+        # ✅ 4. DDP 환경에서만 Pickle 검증
+        if torch.cuda.device_count() > 1:
+            hparams = {
+                k: v for k, v in hparams.items()
+                if is_pickleable(v)
+            }
+
+        return hparams
+    def on_load_checkpoint(self, checkpoint: dict) -> None:
+        self.load_state_dict(checkpoint['state_dict'], strict=False)
+
+    
     def forward(self, x):
         x = self.model(x)
         return self.output_head(x)
@@ -154,8 +190,8 @@ class LitClassifier(pl.LightningModule):
     
     def _compute_logits(self, batch, augment_during_training=None, mode=None):
         """
-        Processes a batch of data to compute logits for either classification or regression tasks. 
-        Applies optional augmentation during training and handles label scaling for regression tasks.
+        Computes logits and normalized targets for classification or regression.
+        Compatible with single_target_decoder for sequence-to-single prediction.
         """
         fmri, subj, target_value, tr, sex = batch.values()
        
@@ -172,11 +208,11 @@ class LitClassifier(pl.LightningModule):
             if self.hparams.decoder == 'series_decoder':
                 logits = rearrange(logits, 'b t ta c -> b (t ta) c')
                 target = rearrange(target, 'b t ta -> b (t ta)')
+
         # Regression task
         elif self.hparams.downstream_task_type == 'regression':
-            
-            logits = self.output_head(feature) # (b,1)
-            unnormalized_target = target_value.float() # (b,1)
+            logits = self.output_head(feature) # [B, E] (already flattened if single_target_decoder)
+            unnormalized_target = target_value.float() # [B, E] or [B, 1]
             
             if self.hparams.decoder == 'series_decoder': # (batch, T, E) -> (batch, T*E)
                 logits = logits.view(logits.size(0), -1)
@@ -189,34 +225,138 @@ class LitClassifier(pl.LightningModule):
             
         return subj, logits, target
     
-    # def _calculate_loss(self, batch, mode):
-    #     """
-    #     Calculates the loss and performance metrics for classification or regression tasks. 
-    #     Logs the results for monitoring during training or evaluation.
-    #     """
-    #     subj, logits, target = self._compute_logits(batch, augment_during_training = self.hparams.augment_during_training)
+    # LitClassifier 클래스 안 아무 곳(예: _calculate_loss 위)에 추가
+    def _derivative(self, x, dim=1):
+        """
+        1st-order finite difference along time dim.
+        x: (B, T, E) 텐서
+        반환: (B, T-1, E)
+        """
+        return x[:, 1:, :] - x[:, :-1, :]
+    
+    def _ccc_loss(self, pred, true, eps=1e-8):
+        if pred.dim() == 3:
+            pred = pred.reshape(pred.size(0), -1)
+            true = true.reshape(true.size(0), -1)
+        μp, μt = pred.mean(1, keepdim=True), true.mean(1, keepdim=True)
+        σp2 = pred.var(1, unbiased=False, keepdim=True)
+        σt2 = true.var(1, unbiased=False, keepdim=True)
+        cov = ((pred - μp) * (true - μt)).mean(1, keepdim=True)
+        ccc = (2 * cov) / (σp2 + σt2 + (μp - μt).pow(2) + eps)
+        return 1 - ccc.mean()
+    
+    def _softdtw_loss(self, pred, target, gamma=0.05):
+        if pred.dim() == 3:
+            B, T, E = pred.shape
+            total_loss = 0.0
+            for i in range(E):
+                for b in range(B):
+                    dist = SoftDTW(gamma=gamma, use_cuda=True)(pred[b, :, i].detach().cpu().numpy(),
+                                                target[b, :, i].detach().cpu().numpy())
+                    total_loss += dist
+            return total_loss / (B * E)
+        elif pred.dim() == 2:
+            B, T = pred.shape
+            total_loss = 0.0
+            for b in range(B):
+                dist = SoftDTW(gamma=gamma, use_cuda=True)(pred[b].detach().cpu().numpy(),
+                                            target[b].detach().cpu().numpy())
+                total_loss += dist
+            return total_loss / B
+        else:
+            raise ValueError("Unsupported tensor shape for SoftDTW loss")
 
-    #     if self.hparams.downstream_task_type == 'classification':
-    #         if self.hparams.decoder == 'series_decoder': # [b, (t ta), c] -> [(b t ta), c]
-    #             logits = rearrange(logits, 'b tta c -> (b tta) c')
-    #             target = target.flatten() # (b,c) -> (b*c)
-    #         loss = F.cross_entropy(logits, target.long()) # target is float
-    #         acc = self.metric.get_accuracy(logits, target.float().squeeze())
-    #         result_dict = {
-    #             f"{mode}_loss": loss,
-    #             f"{mode}_acc": acc,
-    #         }
+    @staticmethod
+    def _fdsm_core(pred_flat, target_flat, bins, scaling):
+        if scaling == 'minmax':
+            bin_edges = torch.linspace(0, 1, bins + 1, device=target_flat.device)
+        else:  # standardization
+            bin_edges = torch.linspace(-4, 4, bins + 1, device=target_flat.device)
 
-    #     elif self.hparams.downstream_task_type == 'regression':
-    #         loss = F.mse_loss(logits.squeeze(), target.squeeze())
-    #         l1 = F.l1_loss(logits.squeeze(), target.squeeze())
-    #         result_dict = {
-    #             f"{mode}_loss": loss,
-    #             f"{mode}_mse": loss,
-    #             f"{mode}_l1_loss": l1
-    #         }
-    #     self.log_dict(result_dict, prog_bar=True, sync_dist=False, add_dataloader_idx=False, on_step=True, on_epoch=True, batch_size=self.hparams.batch_size)
-    #     return loss
+        # bin_ids = torch.bucketize(target_flat, bin_edges, right=False) - 1
+        bin_ids = torch.bucketize(target_flat.contiguous(), bin_edges.contiguous(), right=False) - 1
+        bin_ids = bin_ids.clamp(min=0, max=bins - 1)
+
+        bin_counts = torch.bincount(bin_ids.flatten(), minlength=bins).float()
+        bin_weights = 1.0 / (bin_counts + 1e-6)
+        sample_weights = bin_weights[bin_ids]
+
+        error = (pred_flat - target_flat).pow(2)
+        weighted_error = sample_weights * error
+        return weighted_error.mean()
+
+
+    @staticmethod
+    def fdsm_loss(preds, targets, bins=20, scaling='standardization'):
+        """
+        Supports:
+        - [B, T, E]
+        - [B, T]
+        - [B]
+        """
+        assert preds.shape == targets.shape, "Shape mismatch between preds and targets"
+
+        if preds.dim() == 1:  # [B] → 단일 감정 (scalar)
+            pred_flat = preds
+            target_flat = targets
+        elif preds.dim() == 2:  # [B, T]
+            pred_flat = preds.reshape(-1)
+            target_flat = targets.reshape(-1)
+        elif preds.dim() == 3:  # [B, T, E]
+            B, T, E = preds.shape
+            total_loss = 0.0
+            for i in range(E):
+                pred_i = preds[..., i].reshape(-1)
+                target_i = targets[..., i].reshape(-1)
+                total_loss += LitClassifier._fdsm_core(pred_i, target_i, bins, scaling)
+            return total_loss / E
+        else:
+            raise ValueError(f"Unsupported input shape: {preds.shape}")
+
+        return LitClassifier._fdsm_core(pred_flat, target_flat, bins, scaling)
+    
+
+    @staticmethod
+    def efdm_loss(features, targets, expected_stats_list, reduction='mean'):
+        """
+        Computes EFDM loss per emotion dimension.
+
+        Args:
+            features: [B, T, D]
+            targets: [B, T, E]
+            expected_stats_list: List[Dict] of length E, each with 'mean' and 'var'
+        
+        Returns:
+            total_loss (scalar), list of (per-emotion loss)
+        """
+        assert targets.shape[:2] == features.shape[:2], "B, T mismatch"
+        B, T, D = features.shape
+        E = targets.shape[-1]
+        loss_list = []
+
+        # Flatten features
+        features_flat = features.view(-1, D)  # [B*T, D]
+
+        for i in range(E):
+            stats = expected_stats_list[i]
+            target_i = targets[..., i].reshape(-1)  # not used, but possible for masking
+
+            target_mean = stats['mean'].to(features.device)
+            target_var = stats['var'].to(features.device)
+
+            batch_mean = features_flat.mean(dim=0)
+            batch_var = features_flat.var(dim=0, unbiased=False)
+
+            mean_diff = (batch_mean - target_mean).pow(2).mean()
+            var_diff = (batch_var - target_var).pow(2).mean()
+
+            loss_i = (mean_diff + var_diff) / 2 if reduction == 'mean' else (mean_diff + var_diff)
+            loss_list.append(loss_i)
+
+        total_loss = sum(loss_list) / E
+        return total_loss, loss_list
+
+
 
     def _calculate_loss(self, batch, mode):
         subj, logits, target = self._compute_logits(
@@ -246,58 +386,135 @@ class LitClassifier(pl.LightningModule):
 
                 loss_list = []
 
-                # optional salience-based temporal weighting
-                if self.hparams.loss_type in ["weighted_mse_norm", "weighted_mse_var", "weighted_mse_both"]:
-                    if self.hparams.loss_type == "weighted_mse_norm":
-                        salience = torch.norm(target, dim=2, keepdim=True)
-                    elif self.hparams.loss_type == "weighted_mse_var":
-                        salience = torch.var(target, dim=2, keepdim=True)
-                    elif self.hparams.loss_type == "weighted_mse_both":
-                        norm = torch.norm(target, dim=2, keepdim=True)
-                        var = torch.var(target, dim=2, keepdim=True)
-                        salience = 0.5 * norm + 0.5 * var
-                    temporal_weight = salience / (salience.max() + 1e-6)
-                    temporal_weight = temporal_weight.detach()
-                else:
-                    temporal_weight = None
-
-                # 감정별 가중치 전략 준비
-                if self.hparams.loss_type == 'learnable_weighted_mse':
-                    if not hasattr(self, 'loss_weights'):
-                        self.loss_weights = torch.nn.Parameter(torch.ones(E))
-                elif self.hparams.loss_type == 'uncertainty_weighted_mse':
-                    if not hasattr(self, 'log_vars'):
-                        self.log_vars = torch.nn.Parameter(torch.zeros(E))
-
                 for i in range(E):
-                    error = (logits[:, :, i] - target[:, :, i]) ** 2
-                    if temporal_weight is not None:
-                        weighted_error = error * temporal_weight.squeeze(-1)
-                        mse_i = weighted_error.mean()
+                    pred = logits[:, :, i]       # [B, T]
+                    tgt = target[:, :, i]        # [B, T]
+
+                    if self.hparams.loss_type == 'efdm':
+                        features = self.model(batch["fmri"])  # [B, T, D]
+                        expected_stats_list = self.efdm_stats
+                        efdm_total, efdm_per_emotion = self.efdm_loss(features, target, expected_stats_list)
+                        result_dict[f"{mode}_efdm_loss"] = efdm_total
+                        for i, loss_i in enumerate(efdm_per_emotion):
+                            result_dict[f"{mode}_efdm_loss_{i}"] = loss_i
+                        loss_list.append(self.hparams.efdm_lambda * efdm_total) 
+
+                    elif self.hparams.loss_type == 'fdsm':
+                        scaling = self.hparams.label_scaling_method  # 'standardization' 또는 'minmax'
+                        fdsm_i = self.fdsm_loss(pred, tgt, bins=10, scaling=scaling)
+
+                        result_dict[f"{mode}_fdsm_loss_{i}"] = fdsm_i
+                        loss_list.append(fdsm_i)
+                    
                     else:
-                        mse_i = error.mean()
+                        # 기존 MSE or intensity-weighted MSE 등
+                        error = (logits[:, :, i] - target[:, :, i]) ** 2
 
-                    if self.hparams.loss_type == 'learnable_weighted_mse':
-                        mse_i = self.loss_weights[i] * mse_i
-                    elif self.hparams.loss_type == 'uncertainty_weighted_mse':
-                        precision = torch.exp(-self.log_vars[i])
-                        mse_i = precision * mse_i + self.log_vars[i]
-                    # mean_mse나 weighted_mse_*의 경우는 추가 가중치 없음
+                        if self.hparams.loss_type == 'intensity_learnable_weighted_mse':
+                            intensity = target[:, :, i].abs().detach()
+                            error = error * intensity
+                        elif self.hparams.loss_type == 'log_intensity_learnable_weighted_mse':
+                            intensity = torch.log1p(target[:, :, i].abs()).detach()
+                            error = error * intensity
+                        elif self.hparams.loss_type == 'normalized_intensity_learnable_weighted_mse':
+                            intensity = target[:, :, i].abs().detach()
+                            intensity = intensity / (intensity.mean() + 1e-6)
+                            error = error * intensity
+                        elif self.hparams.loss_type == 'intensity_weighted_mse':
+                            intensity = target[:, :, i].abs().detach()
+                            error = error * intensity
+                            mse_i = error.mean()
 
-                    result_dict[f"{mode}_mse_emotion_{i}"] = mse_i
-                    loss_list.append(mse_i)
+                        if self.hparams.loss_type in [
+                            'intensity_learnable_weighted_mse',
+                            'log_intensity_learnable_weighted_mse',
+                            'normalized_intensity_learnable_weighted_mse',
+                            'learnable_weighted_mse']:
+                            mse_i = self.loss_weights[i] * error.mean()
+                        elif self.hparams.loss_type == 'uncertainty_weighted_mse':
+                            precision = torch.exp(-self.log_vars[i])
+                            mse_i = precision * error.mean() + self.log_vars[i]
+                        else:
+                            mse_i = error.mean()
 
-                # 기본 평균 MSE 또는 전략별 결과
-                loss = sum(loss_list) / E
-                result_dict[f"{mode}_mse"] = loss
+                        result_dict[f"{mode}_mse_emotion_{i}"] = mse_i
+                        loss_list.append(mse_i)
+
+                base_loss = sum(loss_list) / E
+                loss = base_loss
+                result_dict[f"{mode}_loss"] = loss
+
+                # Derivative loss
+                d_pred = self._derivative(logits)
+                d_target = self._derivative(target)
+                der_loss = F.mse_loss(d_pred, d_target)
+                λ_deriv = self.hparams.derivative_lambda
+                loss += λ_deriv * der_loss
+                result_dict[f"{mode}_derivative_mse"] = der_loss
+
+                # Soft-DTW
+                λ_dtw = self.hparams.softdtw_lambda if self.hparams.loss_type in ["softdtw_mse", "softdtw_ccc_mse"] else 0.0
+                if λ_dtw > 0:
+                    softdtw_term = self._softdtw_loss(logits, target, gamma=self.hparams.softdtw_gamma)
+                    loss += λ_dtw * softdtw_term
+                    result_dict[f"{mode}_softdtw"] = softdtw_term
+
+                # CCC
+                λ_ccc = self.hparams.ccc_lambda if self.hparams.loss_type in ["ccc_mse", "softdtw_ccc_mse"] else 0.0
+                if λ_ccc > 0:
+                    ccc_term = self._ccc_loss(logits, target)
+                    loss += λ_ccc * ccc_term
+                    result_dict[f"{mode}_ccc"] = ccc_term                
 
             else:
-                loss = F.mse_loss(logits.squeeze(), target.squeeze())
-                result_dict[f"{mode}_mse"] = loss
+                logits = logits.squeeze(-1) if logits.shape[-1] == 1 else logits
+                target = target.squeeze(-1) if target.shape[-1] == 1 else target
 
-            l1 = F.l1_loss(logits.squeeze(), target.squeeze())
-            result_dict[f"{mode}_loss"] = loss
-            result_dict[f"{mode}_l1_loss"] = l1
+                # 분기 1: scalar prediction (예: [B])
+                if logits.ndim == 1 or logits.shape[-1] == 1:
+                    loss = F.mse_loss(logits.squeeze(), target.squeeze())
+                    result_dict[f"{mode}_mse"] = loss
+                    result_dict[f"{mode}_loss"] = loss
+                    l1 = F.l1_loss(logits.squeeze(), target.squeeze())
+                    result_dict[f"{mode}_l1_loss"] = l1
+
+                # 분기 2: multitarget regression (예: [B, E])
+                else:
+                    loss_list = []
+                    E = logits.shape[-1]
+
+                    # ✅ EFDM 추가: 감정 루프 전에 1번만
+                    if self.hparams.loss_type == 'efdm' and hasattr(self, "efdm_stats"):
+                        with torch.no_grad():
+                            features = self.model(batch["fmri"])  # [B, D] or [B, T, D]
+                            expected_stats_list = self.efdm_stats
+                            efdm_total, efdm_per_emotion = self.efdm_loss(features, target, expected_stats_list)
+
+                        result_dict[f"{mode}_efdm_loss"] = efdm_total
+                        for i, loss_i in enumerate(efdm_per_emotion):
+                            result_dict[f"{mode}_efdm_loss_{i}"] = loss_i
+                        loss_list.append(self.hparams.efdm_lambda * efdm_total)
+
+                        print(f"[EFDM DEBUG] step={self.global_step} | mode={mode} | efdm_total={efdm_total.item():.4f}")
+                        for i, loss_i in enumerate(efdm_per_emotion):
+                            print(f"  [EFDM emotion {i}] loss={loss_i.item():.4f}")
+
+                        loss_list.append(self.hparams.efdm_lambda * efdm_total)
+
+                    for i in range(E):
+                        pred = logits[:, i]
+                        tgt = target[:, i]
+
+                        mse_i = F.mse_loss(pred, tgt)
+                        mae_i = F.l1_loss(pred, tgt)
+
+                        result_dict[f"{mode}_mse_emotion_{i}"] = mse_i
+                        result_dict[f"{mode}_mae_emotion_{i}"] = mae_i
+                        loss_list.append(mse_i)
+
+                    base_loss = sum(loss_list) / E
+                    loss = base_loss
+                    result_dict[f"{mode}_loss"] = loss
 
         self.log_dict(
             result_dict,
@@ -312,151 +529,301 @@ class LitClassifier(pl.LightningModule):
         return loss
 
 
+    # def on_fit_start(self):
+    #     import os, torch
+
+    #     # 1. split 이름 파싱 및 공백 제거
+    #     split_csv = getattr(self.data_module, "split_name", "split_unknown.csv")
+    #     split_tag = os.path.splitext(split_csv)[0].strip()  # "split_seed42" 등
+    #     stats_fname = f"efdm_stats_{split_tag}.pth"
+    #     stats_path = os.path.join(self.hparams.default_root_dir, stats_fname)
+
+    #     # 2. 이미 저장된 통계가 있으면 로드 후 종료
+    #     if os.path.exists(stats_path):
+    #         print(f"📂 EFDM stats already exist for [{split_tag}]. Loading from cache...")
+    #         self.efdm_stats = torch.load(stats_path, map_location="cpu")
+    #         return  # ⛔ 계산 스킵
+
+    #     # 3. 존재하지 않으면 계산 시작
+    #     print(f"🧮 Computing EFDM stats for split [{split_tag}] ...")
+    #     all_feats = []
+
+    #     train_loader = self.data_module.train_dataloader()
+    #     self.model.eval()
+
+    #     with torch.no_grad():
+    #         for batch in train_loader:
+    #             fmri = batch["fmri_sequence"].to(self.device).float()  # [B, C, D, H, W, T]
+    #             feats = self.model(fmri)                               # [B, T, D]
+    #             feats = feats.permute(0, 2, 1).contiguous()            # [B, D, T]
+    #             flat_feats = feats.view(-1, feats.size(-1))            # [B*T, D]
+    #             all_feats.append(flat_feats)
+
+    #     # 4. 평균 및 분산 계산
+    #     flat = torch.cat(all_feats, dim=0)
+    #     mean = flat.mean(dim=0)
+    #     var  = flat.var(dim=0, unbiased=False)
+    #     self.efdm_stats = {"mean": mean, "var": var}
+
+    #     # 5. 통계 저장
+    #     os.makedirs(self.hparams.default_root_dir, exist_ok=True)
+    #     torch.save(self.efdm_stats, stats_path)
+    #     print(f"✅ EFDM stats saved to {stats_path}")
+
+    def on_fit_start(self):
+        import os, torch
+
+        # 1. split 이름 파싱 및 경로 설정
+        split_csv = getattr(self.data_module, "split_name", "split_unknown.csv")
+        split_tag = os.path.splitext(split_csv)[0].strip()
+
+        # 마스킹 여부에 따라 파일 이름 다르게 설정
+        use_mask = getattr(self.hparams, "efdm_mask", False)
+        mask_tag = "_masked" if use_mask else "_all"
+
+        stats_fname = f"efdm_stats_{split_tag}{mask_tag}.pth"
+        stats_path = os.path.join(self.hparams.default_root_dir, stats_fname)
+
+        # 2. 통계 캐시가 이미 존재하면 로딩 후 종료
+        if os.path.exists(stats_path):
+            print(f"📂 EFDM stats already exist for [{split_tag}{mask_tag}]. Loading from cache...")
+            self.efdm_stats = torch.load(stats_path, map_location="cpu")
+            return
+
+        # 3. 새로 계산 시작
+        print(f"🧮 Computing EFDM stats for split [{split_tag}] (mask: {use_mask}) ...")
+        all_feats = []
+
+        train_loader = self.data_module.train_dataloader()
+        self.model.eval()
+
+        # 4. target 기준 마스킹 조건 처리
+        all_targets = []
+        if use_mask:
+            with torch.no_grad():
+                for batch in train_loader:
+                    target = batch["target"]  # [B, T, E]
+                    all_targets.append(target.view(-1, target.shape[-1]))  # [B*T, E]
+            all_targets = torch.cat(all_targets, dim=0)  # [N, E]
+            target_medians = all_targets.median(dim=0).values  # [E]
+            print(f"📊 Median threshold per target: {target_medians}")
+
+        # 5. feature 추출 및 마스킹 적용
+        with torch.no_grad():
+            for batch in train_loader:
+                fmri   = batch["fmri_sequence"].to(self.device).float()  # [B, C, D, H, W, T]
+                target = batch["target"].to(self.device).float()         # [B, T, E]
+
+                feats = self.model(fmri)                     # [B, T, D]
+                feats = feats.permute(0, 2, 1).contiguous()  # [B, D, T]
+                flat_feats = feats.view(-1, feats.size(-1))  # [B*T, D]
+                flat_tgt   = target.view(-1, target.shape[-1])  # [B*T, E]
+
+                if use_mask:
+                    med = target_medians.to(self.device)     # [E]
+                    mask = (flat_tgt > med).any(dim=-1)      # [B*T]
+                    flat_feats = flat_feats[mask]
+
+                all_feats.append(flat_feats)
+
+        # 6. 통계 계산
+        flat = torch.cat(all_feats, dim=0)
+        mean = flat.mean(dim=0)
+        var  = flat.var(dim=0, unbiased=False)
+        self.efdm_stats = {"mean": mean, "var": var}
+
+        # 7. 저장
+        os.makedirs(self.hparams.default_root_dir, exist_ok=True)
+        torch.save(self.efdm_stats, stats_path)
+        print(f"✅ EFDM stats saved to {stats_path}")
+
+
+
+
+
     def _evaluate_metrics(self, subj_array, total_out, mode, best=False):
-        """
-        Evaluates classification or regression metrics for aggregated subject-level predictions. 
-        Logs accuracy, balanced accuracy, and AUROC for classification tasks, and MSE, MAE, and correlation coefficients for regression tasks, including metrics on the original scale.
-        """
-        mode_str = mode if best == False else 'best_'+mode # kimbo change
+        mode_str = mode if not best else f'best_{mode}'
         subjects = np.unique(subj_array)
-        
-        subj_avg_logits = []
-        subj_targets = []
+
+        subj_avg_logits, subj_targets = [], []
+
         for subj in subjects:
             subj_logits = [total_out[i][0] for i in range(len(subj_array)) if subj_array[i] == subj]
-            if self.hparams.decoder == 'series_decoder': # do not calculate the average logits
+            subj_target = [total_out[i][1] for i in range(len(subj_array)) if subj_array[i] == subj][0]
+            subj_targets.append(subj_target)
+
+            if self.hparams.decoder == 'series_decoder':
+                # subj_logits: list of [1, T, 7]
                 subj_avg_logits.append(subj_logits)
-            else:
-                subj_avg_logits.append(torch.mean(torch.stack(subj_logits), dim=0))
-            subj_targets.append([total_out[i][1] for i in range(len(subj_array)) if subj_array[i] == subj][0])
-    
+            else:  # single_target_decoder
+                # subj_logits: list of [7]
+                subj_avg_logits.append(torch.mean(torch.stack(subj_logits), dim=0))  # → [7]
+
+        # Stack tensors
         if self.hparams.decoder == 'series_decoder':
-            subj_avg_logits = [i[0] for i in subj_avg_logits] # unpack single values from the list
-            subj_avg_logits = torch.stack(subj_avg_logits)
-            subj_targets = torch.stack(subj_targets)
-        else:
-            subj_avg_logits = torch.stack(subj_avg_logits)
-            subj_targets = torch.tensor(subj_targets)
-    
-        if self.hparams.downstream_task_type == 'classification':
-            
+            subj_avg_logits = [x[0] for x in subj_avg_logits]  # remove dummy dim: [1, T, 7] → [T, 7]
+            subj_avg_logits = torch.stack(subj_avg_logits)     # [B, T, 7]
+            subj_targets = torch.stack(subj_targets)           # [B, T, 7]
+            logits = subj_avg_logits.view(-1, self.hparams.num_targets)
+            targets = subj_targets.view(-1, self.hparams.num_targets)
+
+        else:  # single_target_decoder
+            subj_avg_logits = torch.stack(subj_avg_logits)     # [B, E] or [B]
+            subj_targets = torch.stack(subj_targets)           # [B, E] or [B]
+            logits, targets = subj_avg_logits, subj_targets
+
+            # flatten to [B] if scalar
+            if logits.ndim == 1 or logits.shape[-1] == 1:
+                logits = logits.squeeze(-1)
+                targets = targets.squeeze(-1)
+
+        # Metric logging
+        if self.hparams.downstream_task_type == 'regression':
             if self.hparams.decoder == 'series_decoder':
-                subj_avg_logits = rearrange(subj_avg_logits, 'b tta c -> (b tta) c')
-                subj_targets = subj_targets.flatten()
-                
-            num_classes = subj_avg_logits.shape[1]
-            
-            probabilities = F.softmax(subj_avg_logits.to(dtype=torch.float32), dim=1) # (b,num_classes), require 32 bit precision
-            predictions = probabilities.argmax(dim=1) # (b)
-            
-            predictions_np = predictions.cpu().numpy()
-            targets_np = subj_targets.cpu().numpy()
+                # [B, T, 7] → flatten
+                logits = subj_avg_logits.view(-1, self.hparams.num_targets)
+                targets = subj_targets.view(-1, self.hparams.num_targets)
+                self._log_base_metrics(logits, targets, mode_str)
+                self._log_per_target_metrics(logits, targets, mode_str)
 
-            accuracy = accuracy_score(targets_np, predictions_np)
-            balanced_accuracy = balanced_accuracy_score(targets_np, predictions_np)
-
-            if num_classes == 2:
-                roc_auc = roc_auc_score(targets_np, predictions_np)
-            else: 
-                targets_one_hot = label_binarize(targets_np, classes=np.arange(num_classes))
-                roc_auc = roc_auc_score(targets_one_hot, probabilities.cpu().detach().numpy(), multi_class='ovr')
-
-            if self.hparams.decoder == 'series_decoder':
-                
-                # evaluate multiple targets separately
-                t = self.hparams.img_size[3]
-
-                subj_avg_logits = rearrange(subj_avg_logits, '(b t ta) c -> b t ta c', t=t, ta=self.hparams.num_targets, c=self.hparams.num_classes)
-                subj_targets = rearrange(subj_targets, '(b t ta) -> b t ta', t=t, ta=self.hparams.num_targets)
-            
-                for i in range(self.hparams.num_targets):
-                    logits_group = subj_avg_logits[:,:,i]  # Shape: [batch_size, temporal_size, num_classes]
-                    target_group = subj_targets[..., i]
-                    
-                    probabilities = F.softmax(logits_group.to(dtype=torch.float32), dim=-1) # (b, temporal_size, num_classes), require 32 bit precision
-                    predictions = probabilities.argmax(dim=-1) # (b, temporal_size)
-                    
-                    predictions_np = predictions.flatten().cpu().numpy()
-                    targets_np = target_group.flatten().cpu().numpy()
-                    
-                    accuracy_group = accuracy_score(targets_np, predictions_np)
-                    balanced_accuracy_group = balanced_accuracy_score(targets_np, predictions_np)
-                    
-                    if num_classes == 2:
-                        roc_auc_group = roc_auc_score(targets_np, predictions_np)
-                    else: 
-                        targets_one_hot = label_binarize(targets_np, classes=np.arange(num_classes))
-                        roc_auc_group = roc_auc_score(targets_one_hot, rearrange(probabilities, 'b t c -> (b t) c').cpu().detach().numpy(), multi_class='ovr')
-                    
-                    self.log(f"{mode_str}_acc_{i}", accuracy_group, sync_dist=True)
-                    self.log(f"{mode_str}_balacc_{i}", balanced_accuracy_group, sync_dist=True)
-                    self.log(f"{mode_str}_AUROC_{i}", roc_auc_group, sync_dist=True)
-                
-            self.log(f"{mode_str}_acc", accuracy, sync_dist=True)
-            self.log(f"{mode_str}_balacc", balanced_accuracy, sync_dist=True)
-            self.log(f"{mode_str}_AUROC", roc_auc, sync_dist=True)
- 
-        # regression target is normalized
-        elif self.hparams.downstream_task_type == 'regression':
-            subj_avg_logits = subj_avg_logits.squeeze(-1)
-            mse = F.mse_loss(subj_avg_logits, subj_targets)
-            mae = F.l1_loss(subj_avg_logits, subj_targets)
-            
-            # reconstruct to original scale
-            if self.hparams.label_scaling_method == 'standardization': # default
-                adjusted_mse = F.mse_loss(subj_avg_logits * self.scaler.scale_[0] + self.scaler.mean_[0], subj_targets * self.scaler.scale_[0] + self.scaler.mean_[0])
-                adjusted_mae = F.l1_loss(subj_avg_logits * self.scaler.scale_[0] + self.scaler.mean_[0], subj_targets * self.scaler.scale_[0] + self.scaler.mean_[0])
-            elif self.hparams.label_scaling_method == 'minmax':
-                adjusted_mse = F.mse_loss(subj_avg_logits * (self.scaler.data_max_[0] - self.scaler.data_min_[0]) + self.scaler.data_min_[0], subj_targets * (self.scaler.data_max_[0] - self.scaler.data_min_[0]) + self.scaler.data_min_[0])
-                adjusted_mae = F.l1_loss(subj_avg_logits * (self.scaler.data_max_[0] - self.scaler.data_min_[0]) + self.scaler.data_min_[0], subj_targets * (self.scaler.data_max_[0] - self.scaler.data_min_[0]) + self.scaler.data_min_[0])
-            pearson = PearsonCorrCoef()
-            r2_score = R2Score()
-            
-            if self.hparams.decoder == 'series_decoder':
-                pearson_coef = pearson(subj_avg_logits.flatten(), subj_targets.flatten())
-                r2 = r2_score(subj_avg_logits.flatten(), subj_targets.flatten()) if len(subj_avg_logits) >=2 else 0
             else:
-                pearson_coef = pearson(subj_avg_logits, subj_targets)
-                r2 = r2_score(subj_avg_logits, subj_targets) if len(subj_avg_logits) >=2 else 0
-            
-            if self.hparams.decoder == 'series_decoder':
-                
-                # evaluate multiple targets separately
-                t = self.hparams.img_size[3]
-            
-                subj_avg_logits = subj_avg_logits.view(-1, t ,self.hparams.num_targets) # (b, t*num_targets) -> (b, t, num_targets)
-                subj_targets = subj_targets.view(-1, t ,self.hparams.num_targets) # (b, t*num_targets) -> (b, t, num_targets)
-            
-                for i in range(self.hparams.num_targets):
-                    logits_group = subj_avg_logits[..., i]  # Shape: [batch_size, temporal_size]
-                    target_group = subj_targets[..., i]
-                
-                    mse_group = F.mse_loss(logits_group, target_group)  # target is float
-                    mae_group = F.l1_loss(logits_group, target_group)
-                
-                    pearson_coef_group = pearson(logits_group.flatten(), target_group.flatten())
-                    r2_group = r2_score(logits_group.flatten(), target_group.flatten()) 
+                logits, targets = subj_avg_logits, subj_targets  # [B, 7]
+                # 안전하게 squeeze
+                if logits.ndim == 2 and logits.shape[-1] == 1:
+                    logits = logits.squeeze(-1)
+                    targets = targets.squeeze(-1)
 
-                    if self.hparams.label_scaling_method == 'standardization': # default
-                        adjusted_mse_group = F.mse_loss(logits_group * self.scaler.scale_[0] + self.scaler.mean_[0], target_group * self.scaler.scale_[0] + self.scaler.mean_[0])
-                        adjusted_mae_group = F.l1_loss(logits_group * self.scaler.scale_[0] + self.scaler.mean_[0], target_group * self.scaler.scale_[0] + self.scaler.mean_[0])
-                    elif self.hparams.label_scaling_method == 'minmax':
-                        adjusted_mse_group = F.mse_loss(logits_group * (self.scaler.data_max_[0] - self.scaler.data_min_[0]) + self.scaler.data_min_[0], target_group * (self.scaler.data_max_[0] - self.scaler.data_min_[0]) + self.scaler.data_min_[0])
-                        adjusted_mae_group = F.l1_loss(logits_group * (self.scaler.data_max_[0] - self.scaler.data_min_[0]) + self.scaler.data_min_[0], target_group * (self.scaler.data_max_[0] - self.scaler.data_min_[0]) + self.scaler.data_min_[0])
+                # log base metrics (항상 실행)
+                self._log_base_metrics(logits, targets, mode_str)
 
-                    self.log(f"{mode_str}_corrcoef_{i}", pearson_coef_group, sync_dist=True)
-                    self.log(f"{mode_str}_r2_score_{i}", r2_group, sync_dist=True)
-                    self.log(f"{mode_str}_mse_{i}", mse_group, sync_dist=True)
-                    self.log(f"{mode_str}_mae_{i}", mae_group, sync_dist=True)
-                    self.log(f"{mode_str}_adjusted_mse_{i}", adjusted_mse_group, sync_dist=True)
-                    self.log(f"{mode_str}_adjusted_mae_{i}", adjusted_mae_group, sync_dist=True)
-            
-            self.log(f"{mode_str}_corrcoef", pearson_coef, sync_dist=True)
-            self.log(f"{mode_str}_r2_score", r2, sync_dist=True)
-            self.log(f"{mode_str}_mse", mse, sync_dist=True)
-            self.log(f"{mode_str}_mae", mae, sync_dist=True)
-            self.log(f"{mode_str}_adjusted_mse", adjusted_mse, sync_dist=True) 
-            self.log(f"{mode_str}_adjusted_mae", adjusted_mae, sync_dist=True)
+                # multitarget일 때만 per-target metrics 실행
+                if logits.ndim == 2 and logits.shape[-1] > 1:
+                    self._log_per_target_metrics(logits, targets, mode_str)
+
+            # EFDM: 항상 decoder 관계없이 실행
+            if self.hparams.loss_type == "efdm" and hasattr(self, "efdm_stats"):
+                self._log_efdm_metrics(mode_str)
+
+    def _log_base_metrics(self, logits, targets, mode_str):
+        # logits, targets: [B, 7]
+        mse = F.mse_loss(logits, targets)
+        mae = F.l1_loss(logits, targets)
+
+        if self.hparams.label_scaling_method == 'standardization':
+            logits_adj = logits * self.scaler.scale_[0] + self.scaler.mean_[0]
+            targets_adj = targets * self.scaler.scale_[0] + self.scaler.mean_[0]
+        else:  # minmax
+            scale = self.scaler.data_max_[0] - self.scaler.data_min_[0]
+            logits_adj = logits * scale + self.scaler.data_min_[0]
+            targets_adj = targets * scale + self.scaler.data_min_[0]
+
+        adjusted_mse = F.mse_loss(logits_adj, targets_adj)
+        adjusted_mae = F.l1_loss(logits_adj, targets_adj)
+
+        pearson = PearsonCorrCoef()(logits.flatten(), targets.flatten())
+        ccc = concordance_corrcoef(logits.flatten(), targets.flatten())
+        r2_score_val = R2Score()(logits.flatten(), targets.flatten()) if len(logits) >= 2 else 0
+
+        for name, val in zip(["mse", "mae", "adjusted_mse", "adjusted_mae", "corrcoef", "r2_score", "ccc"],
+                            [mse, mae, adjusted_mse, adjusted_mae, pearson, r2_score_val, ccc]):
+            self.log(f"{mode_str}_{name}", val, sync_dist=True)
+
+    
+    def _log_per_target_metrics(self, logits, targets, mode_str):
+        # logits, targets: [B, 7] or [B*T, 7]
+        nt = self.hparams.num_targets
+        for i in range(nt):
+            l_i = logits[:, i]
+            t_i = targets[:, i]
+
+            mse_i = F.mse_loss(l_i, t_i)
+            mae_i = F.l1_loss(l_i, t_i)
+            # 안전 처리
+            if l_i.numel() < 2:
+                r2_i = torch.tensor(0.0, device=l_i.device)
+                corr_i = torch.tensor(0.0, device=l_i.device)
+                ccc_i  = torch.tensor(0.0, device=l_i.device)
+            else:
+                r2_i = R2Score()(l_i, t_i)
+                corr_i = PearsonCorrCoef()(l_i, t_i)
+                ccc_i  = concordance_corrcoef(l_i, t_i)
+
+            if self.hparams.label_scaling_method == 'standardization':
+                l_adj = l_i * self.scaler.scale_[0] + self.scaler.mean_[0]
+                t_adj = t_i * self.scaler.scale_[0] + self.scaler.mean_[0]
+                fdsm = self.fdsm_loss(l_i, t_i, scaling='standardization')
+            else:
+                scale = self.scaler.data_max_[0] - self.scaler.data_min_[0]
+                l_adj = l_i * scale + self.scaler.data_min_[0]
+                t_adj = t_i * scale + self.scaler.data_min_[0]
+                fdsm = self.fdsm_loss(l_i, t_i, scaling='minmax')
+
+            adj_mse_i = F.mse_loss(l_adj, t_adj)
+            adj_mae_i = F.l1_loss(l_adj, t_adj)
+
+            for name, val in zip(
+                ["mse", "mae", "adjusted_mse", "adjusted_mae", "corrcoef", "r2_score", "ccc", "fdsm_loss"],
+                [mse_i, mae_i, adj_mse_i, adj_mae_i, corr_i, r2_i, ccc_i, fdsm]
+            ):
+                self.log(f"{mode_str}_{name}_{i}", val, sync_dist=True)
+
+
+    def _log_efdm_metrics(self, mode: str):
+        """
+        EFDM (expected feature distribution matching) 지표를 계산해 로깅합니다.
+        - mode: 'val' 또는 'best_val' 등 로그 키에 사용될 모드 문자열
+        """
+        # 1) DataModule에서 반환된 모든 DataLoader를 가져옵니다.
+        val_loaders = self.data_module.val_dataloader()  # List[DataLoader]
+        all_feats, all_tgts = [], []
+
+        with torch.no_grad():
+            # 2) 각 DataLoader, 각 배치 순회
+            for loader in val_loaders:
+                for batch in loader:
+                    # ── 배치에서 필요한 텐서 꺼내기 ──
+                    fmri_seq     = batch["fmri_sequence"].to(self.device).float()  # [B, C, D, H, W, T]
+                    target_value = batch["target"].to(self.device)                # [B, T, E] or [B, E]
+
+                    # ── 3) feature 추출 및 시퀀스 차원 정렬 ──
+                    feats = self.model(fmri_seq)                                   # [B, D] or [B, T, D]
+                    # 토큰 차원이 2번째 축일 때 (B, D, N) → (B, N, D)
+                    if feats.ndim == 3:
+                        feats = feats.permute(0, 2, 1).contiguous()               # [B, T, D]
+                        B, T, D = feats.shape
+                        flat = feats.reshape(B * T, D)                           # [B*T, D]
+                    else:
+                        # 만약 [B, D] 형태라면 시퀀스 차원이 없으므로 그대로
+                        flat = feats                                              # [B, D]
+                    all_feats.append(flat)
+
+                    # ── 4) target 펼치기 ──
+                    if target_value.ndim == 3:
+                        B, T, E = target_value.shape
+                        tgt_flat = target_value.reshape(B * T, E)                 # [B*T, E]
+                    else:
+                        tgt_flat = target_value                                   # [B, E]
+                    all_tgts.append(tgt_flat)
+
+        # ── 5) 전체 concat ──
+        features_flat = torch.cat(all_feats, dim=0)  # [N, D]
+        targets_flat  = torch.cat(all_tgts,  dim=0)  # [N, E]
+
+        # ── 6) 감정(emotion)별로 EFD M 비교 ──
+        for i in range(self.hparams.num_targets):
+            expected = self.efdm_stats[i]
+            # 감정 i가 활성화된 프레임만 골라낼 mask
+            mask = targets_flat[:, i] > 0.0
+            feats_i = features_flat[mask] if mask.any() else features_flat
+
+            # mean / var shift 계산
+            mean_shift = (feats_i.mean(dim=0) - expected["mean"].to(self.device)).pow(2).mean()
+            var_shift  = (feats_i.var(dim=0, unbiased=False) - expected["var"].to(self.device)).pow(2).mean()
+
+            # ── 7) 로깅 ──
+            self.log(f"{mode}_efdm_mean_shift_{i}", mean_shift, sync_dist=True)
+            self.log(f"{mode}_efdm_var_shift_{i}",  var_shift,  sync_dist=True)
+
 
 
     def training_step(self, batch, batch_idx):
@@ -475,7 +842,16 @@ class LitClassifier(pl.LightningModule):
         if self.hparams.decoder == 'series_decoder': # (batch, T, E) -> (batch, T*E)
             output = [(logit.cpu().detach(), targets.cpu()) for logit, targets in zip(logits, target)] # target is not single value, item() cannot be invoked
         else:
-            output = [(logit.cpu().detach(), targets.cpu().item()) for logit, targets in zip(logits, target)]
+            output = []
+            for logit, targets in zip(logits, target):
+                logit = logit.cpu().detach()
+                targets = targets.cpu()
+
+                if targets.numel() == 1:
+                    output.append((logit, targets.item()))  # scalar case
+                else:
+                    output.append((logit, targets))         # multitask (e.g. [7])
+
         return (subj, output)
 
     def validation_epoch_end(self, outputs):
@@ -565,11 +941,26 @@ class LitClassifier(pl.LightningModule):
         Processes a single test batch to compute logits and targets, 
         returning subject IDs and corresponding predictions for evaluation.
         """
-        subj, logits, target = self._compute_logits(batch) #(b, num_classes)
-        if self.hparams.decoder == 'series_decoder': # (batch, T, E) -> (batch, T*E)
-            output = [(logit.cpu().detach(), targets.cpu()) for logit, targets in zip(logits, target)] # target is not single value, item() cannot be invoked
+        subj, logits, target = self._compute_logits(batch)  # (B, ...)
+
+        if self.hparams.decoder == 'series_decoder':
+            # logits: [B, T*E], target: [B, T*E]
+            output = [
+                (logit.cpu().detach(), targets.cpu())
+                for logit, targets in zip(logits, target)
+            ]
         else:
-            output = [(logit.cpu().detach(), targets.cpu().item()) for logit, targets in zip(logits, target)]
+            # single_target_decoder: scalar or multitask
+            output = []
+            for logit, targets in zip(logits, target):
+                logit = logit.cpu().detach()
+                targets = targets.cpu()
+
+                if targets.numel() == 1:
+                    output.append((logit, targets.item()))  # scalar prediction
+                else:
+                    output.append((logit, targets))         # multitask prediction
+
         return (subj, output)
 
     def test_epoch_end(self, outputs):
@@ -723,14 +1114,48 @@ class LitClassifier(pl.LightningModule):
         
         # decoder related
         group.add_argument("--num_classes", type=int, default=2, help="Number of distinct target classes")
-        group.add_argument("--decoder", type=str, default="single_target_decoder", help="Which decoder to use: (i) single_target_decoder - predict a single value via regression or classification | (ii) series_decoder: predict a series of values (one per timeframe) via regression")
+        group.add_argument(
+            "--decoder",
+            type=str,
+            default="single_target_scalar",
+            help=(
+                "Which decoder to use:\n"
+                "(i) single_target_scalar - predict a single scalar value (e.g., age, sex) via regression or classification\n"
+                "(ii) single_target_multitask - predict multiple independent scalar values (e.g., 7 emotion scores) via regression\n"
+                "(iii) series_decoder - predict a time series of values (one per timeframe) via regression"
+            )
+        )
         group.add_argument("--num_targets", type=int, default=7, help="Number of targets to predict in series_decoder")
-        # parser.add_argument("--valid_only", action='store_true', help="disable running _evaluate_metrics(mode='test') at validation stage") # kimbo change
 
         # loss related
         group.add_argument("--loss_type", type=str, default="mean_mse",
-                   choices=["mean_mse", "weighted_mse_norm", "weighted_mse_var", "weighted_mse_both", "learnable_weighted_mse", "uncertainty_weighted_mse"],
+                   choices=[
+                    "mean_mse", "weighted_mse_norm", "weighted_mse_var", "weighted_mse_both",
+                    "learnable_weighted_mse", "uncertainty_weighted_mse",
+                    "intensity_weighted_mse", "intensity_learnable_weighted_mse",
+                    "log_intensity_learnable_weighted_mse", "normalized_intensity_learnable_weighted_mse",
+                    "softdtw_mse", "ccc_mse", "softdtw_ccc_mse", 
+                    "fdsm", "efdm"],
                    help="Loss function type for series decoder: basic or weighted")
+        group.add_argument(
+            "--derivative_lambda",
+            type=float,
+            default=0.0,                 # 0이면 비활성
+            help="가치 변화율(1차 차분) MSE 가중치 λ; 0이면 파생 손실을 사용하지 않음"
+        )
+        # ② Soft-DTW · CCC 하이퍼파라미터 기본값
+        group.add_argument("--softdtw_lambda", type=float, default=0.1,
+                        help="softdtw_mse, softdtw_ccc_mse 사용 시 가중치 λ")
+        group.add_argument("--softdtw_gamma", type=float, default=0.05,
+                        help="Soft-DTW γ (부드러움 정도)")
+        group.add_argument("--ccc_lambda", type=float, default=0.1,
+                        help="ccc_mse, softdtw_ccc_mse 사용 시 가중치 λ")
+        group.add_argument("--fdsm_lambda", type=float, default=0.3,
+                   help="fdsm loss의 smoothing 가중치 λ (MAE + λ × smooth)")
+        group.add_argument("--efdm_lambda", type=float, default=1.0,
+                   help="Weight for EFDM loss when used as part of total loss.")
+        group.add_argument("--efdm_mask", action="store_true",
+                   help="Apply median-based masking for EFDM stats (use only target > median)")
 
 
         return parser

@@ -36,8 +36,6 @@ class BaseDataset(Dataset):
     
     def load_sequence(self, subject_path, start_frame, sample_duration, num_frames=None): 
         y = []
-        # if start_frame + self.sequence_length > 749: # kimbo change for DM: TODO: needs to change for movieTP
-        #     return None
             
         if self.shuffle_time_sequence: # shuffle whole sequences
             load_fnames = [f'frame_{frame}.pt' for frame in random.sample(list(range(0,num_frames)),sample_duration//self.stride_within_seq)]
@@ -75,10 +73,6 @@ class HBN(BaseDataset):
         print(f"Number of unique subjects: {len(unique_subjects)}")
 
     def _set_data(self, root, subject_dict):
-        # if self.adjust_hrf:
-        #     start_TR = 0 # kimbo change
-        # else:
-        #     start_TR = 6 # kimbo change
         data = []
         
         img_root = os.path.join(root, 'img') 
@@ -92,7 +86,6 @@ class HBN(BaseDataset):
             ])
             
             session_duration = num_frames - self.sample_duration + 1 #- start_TR: kimbo change
-            # pdb.set_trace()
             start_frame_adjustment = 7 if not self.adjust_hrf else 0   # kimbo change: If HRF correction is not applied, shift the start frame by an additional 7 TRs
             for start_frame in range(start_frame_adjustment, session_duration, self.stride):
                 if start_frame < 0:
@@ -110,7 +103,20 @@ class HBN(BaseDataset):
                                 num_frames,
                                 target[output_start_frame:min(output_start_frame+self.sample_duration,num_frames)],
                                 sex)
-                elif self.decoder == 'single_target_decoder':
+                elif self.decoder == 'single_target_multitask':
+                    target_frame_idx = start_frame + self.sample_duration
+                    if not (0 <= target_frame_idx < num_frames):
+                        continue
+                    target_frame = target[target_frame_idx]  # shape: [num_emotions]
+                    data_tuple = (i,
+                                  subject_name,
+                                  subject_path,
+                                  start_frame,
+                                  self.sample_duration,
+                                  num_frames,
+                                  target_frame,
+                                  sex)
+                elif self.decoder == 'single_target_scalar':
                     data_tuple = (i,
                                   subject_name,
                                   subject_path,
@@ -123,8 +129,6 @@ class HBN(BaseDataset):
                     raise ValueError("Invalid decoder")
                 data.append(data_tuple)
 
-        # train dataset
-        # for regression tasks
         if self.train: 
             self.target_values = np.array([tup[6] for tup in data]).reshape(-1, 1)
 
@@ -138,6 +142,7 @@ class HBN(BaseDataset):
         if not (0 <= input_start_frame < num_frames):  # 범위를 벗어나면 건너뛰기
             return None
         y = self.load_sequence(subject_path, start_frame, sequence_length, num_frames)
+        # print(f"Loaded sequence for subject {subject_name} at start frame {start_frame} with shape {y.shape}")
 
         if y is None: 
             return None # 이후 코드가 실행되지 않음
@@ -179,17 +184,6 @@ class Dummy(BaseDataset):
         _, subj, _, sequence_length = self.data[idx]
         y = torch.randn(( 1, 96, 96, 96, sequence_length),dtype=torch.float16) #self.y[seq_idx]
         sex = torch.randint(0,2,(1,)).float()
-        
-        # classification
-        #num_classes = 2
-        #target = torch.randint(0,num_classes,(1,)).float()
-        
-        # regression
-        #target = torch.rand(1)
-        
-        # series decoder regression
-        #num_targets = 7
-        #target = torch.randn(20, num_targets)
         
         # series decoder classification
         num_targets = 7
