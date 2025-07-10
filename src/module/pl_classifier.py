@@ -528,78 +528,39 @@ class LitClassifier(pl.LightningModule):
 
         return loss
 
-
-    # def on_fit_start(self):
-    #     import os, torch
-
-    #     # 1. split 이름 파싱 및 공백 제거
-    #     split_csv = getattr(self.data_module, "split_name", "split_unknown.csv")
-    #     split_tag = os.path.splitext(split_csv)[0].strip()  # "split_seed42" 등
-    #     stats_fname = f"efdm_stats_{split_tag}.pth"
-    #     stats_path = os.path.join(self.hparams.default_root_dir, stats_fname)
-
-    #     # 2. 이미 저장된 통계가 있으면 로드 후 종료
-    #     if os.path.exists(stats_path):
-    #         print(f"📂 EFDM stats already exist for [{split_tag}]. Loading from cache...")
-    #         self.efdm_stats = torch.load(stats_path, map_location="cpu")
-    #         return  # ⛔ 계산 스킵
-
-    #     # 3. 존재하지 않으면 계산 시작
-    #     print(f"🧮 Computing EFDM stats for split [{split_tag}] ...")
-    #     all_feats = []
-
-    #     train_loader = self.data_module.train_dataloader()
-    #     self.model.eval()
-
-    #     with torch.no_grad():
-    #         for batch in train_loader:
-    #             fmri = batch["fmri_sequence"].to(self.device).float()  # [B, C, D, H, W, T]
-    #             feats = self.model(fmri)                               # [B, T, D]
-    #             feats = feats.permute(0, 2, 1).contiguous()            # [B, D, T]
-    #             flat_feats = feats.view(-1, feats.size(-1))            # [B*T, D]
-    #             all_feats.append(flat_feats)
-
-    #     # 4. 평균 및 분산 계산
-    #     flat = torch.cat(all_feats, dim=0)
-    #     mean = flat.mean(dim=0)
-    #     var  = flat.var(dim=0, unbiased=False)
-    #     self.efdm_stats = {"mean": mean, "var": var}
-
-    #     # 5. 통계 저장
-    #     os.makedirs(self.hparams.default_root_dir, exist_ok=True)
-    #     torch.save(self.efdm_stats, stats_path)
-    #     print(f"✅ EFDM stats saved to {stats_path}")
-
     def on_fit_start(self):
         import os, torch
+
+        # ✅ EFDM loss가 아닌 경우 스킵
+        if getattr(self.hparams, "loss_type", "").lower() != "efdm":
+            return
 
         # 1. split 이름 파싱 및 경로 설정
         split_csv = getattr(self.data_module, "split_name", "split_unknown.csv")
         split_tag = os.path.splitext(split_csv)[0].strip()
 
-        # 마스킹 여부에 따라 파일 이름 다르게 설정
+        # 2. 마스킹 여부에 따라 파일 이름 분기
         use_mask = getattr(self.hparams, "efdm_mask", False)
         mask_tag = "_masked" if use_mask else "_all"
-
         stats_fname = f"efdm_stats_{split_tag}{mask_tag}.pth"
         stats_path = os.path.join(self.hparams.default_root_dir, stats_fname)
+        print('📂 EFDM stats path:', stats_path)
 
-        # 2. 통계 캐시가 이미 존재하면 로딩 후 종료
+        # 3. 기존 통계가 있으면 로드 후 종료
         if os.path.exists(stats_path):
             print(f"📂 EFDM stats already exist for [{split_tag}{mask_tag}]. Loading from cache...")
             self.efdm_stats = torch.load(stats_path, map_location="cpu")
             return
 
-        # 3. 새로 계산 시작
+        # 4. 새로 계산
         print(f"🧮 Computing EFDM stats for split [{split_tag}] (mask: {use_mask}) ...")
         all_feats = []
-
         train_loader = self.data_module.train_dataloader()
         self.model.eval()
 
-        # 4. target 기준 마스킹 조건 처리
-        all_targets = []
+        # 4-1. 마스킹이 필요한 경우 median 통계 먼저 계산
         if use_mask:
+            all_targets = []
             with torch.no_grad():
                 for batch in train_loader:
                     target = batch["target"]  # [B, T, E]
@@ -608,35 +569,45 @@ class LitClassifier(pl.LightningModule):
             target_medians = all_targets.median(dim=0).values  # [E]
             print(f"📊 Median threshold per target: {target_medians}")
 
-        # 5. feature 추출 및 마스킹 적용
+        # 4-2. feature 추출 및 마스킹 적용 (batch 단위에서 직접 filtering)
         with torch.no_grad():
             for batch in train_loader:
                 fmri   = batch["fmri_sequence"].to(self.device).float()  # [B, C, D, H, W, T]
                 target = batch["target"].to(self.device).float()         # [B, T, E]
 
-                feats = self.model(fmri)                     # [B, T, D]
-                feats = feats.permute(0, 2, 1).contiguous()  # [B, D, T]
-                flat_feats = feats.view(-1, feats.size(-1))  # [B*T, D]
-                flat_tgt   = target.view(-1, target.shape[-1])  # [B*T, E]
+                feats = self.model(fmri)        # [B, T, D]
+                pooled_feats = feats.mean(dim=1)  # [B, D]
 
                 if use_mask:
-                    med = target_medians.to(self.device)     # [E]
-                    mask = (flat_tgt > med).any(dim=-1)      # [B*T]
-                    flat_feats = flat_feats[mask]
+                    # mask: 감정 중 하나라도 median 초과한 sample
+                    mask = (target > target_medians.to(self.device)).any(dim=-1)  # [B]
+                    pooled_feats = pooled_feats[mask]
 
-                all_feats.append(flat_feats)
+                all_feats.append(pooled_feats)
 
-        # 6. 통계 계산
+                # pdb.set_trace()  # kimbo change
+                # feats = self.model(fmri)                     # [B, T, D], torch.Size([2, 768, 120])
+                # feats = feats.permute(0, 2, 1).contiguous()  # [B, D, T], torch.Size([2, 120, 768])
+                # flat_feats = feats.view(-1, feats.size(-1))  # [B*T, D],  torch.Size([240, 768]) 가 아니라 [2*768, 120]이 되어야함. 
+
+                # if use_mask:
+                #     flat_tgt = target.view(-1, target.shape[-1])          # [B*T, E], torch.Size([2, 7])
+                #     med = target_medians.to(self.device)                  # [E]
+                #     mask = (flat_tgt > med).any(dim=-1)                   # [B*T] > 2가 되어버림. 
+                #     flat_feats = flat_feats[mask]                        # apply mask to this batch
+
+                # all_feats.append(flat_feats)
+        pdb.set_trace()  # kimbo change
+        # 5. 전체 평균 및 분산 계산
         flat = torch.cat(all_feats, dim=0)
         mean = flat.mean(dim=0)
         var  = flat.var(dim=0, unbiased=False)
         self.efdm_stats = {"mean": mean, "var": var}
 
-        # 7. 저장
+        # 6. 저장
         os.makedirs(self.hparams.default_root_dir, exist_ok=True)
         torch.save(self.efdm_stats, stats_path)
         print(f"✅ EFDM stats saved to {stats_path}")
-
 
 
 
@@ -808,7 +779,7 @@ class LitClassifier(pl.LightningModule):
         # ── 5) 전체 concat ──
         features_flat = torch.cat(all_feats, dim=0)  # [N, D]
         targets_flat  = torch.cat(all_tgts,  dim=0)  # [N, E]
-
+        pdb.set_trace()
         # ── 6) 감정(emotion)별로 EFD M 비교 ──
         for i in range(self.hparams.num_targets):
             expected = self.efdm_stats[i]
