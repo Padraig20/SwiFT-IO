@@ -146,14 +146,15 @@ class LitClassifier(pl.LightningModule):
         img = rearrange(img, 'b t c h w d -> b c h w d t')
 
         return img
-    
+
+
     def _compute_logits(self, batch, augment_during_training=None, mode=None):
         """
         Processes a batch of data to compute logits for either classification or regression tasks. 
         Applies optional augmentation during training and handles label scaling for regression tasks.
         """
         fmri, subj, target_value, tr, sex = batch.values()
-       
+
         if augment_during_training:
             if mode == 'train': # kimbo change
                 fmri = self.augment(fmri)
@@ -169,10 +170,11 @@ class LitClassifier(pl.LightningModule):
                 target = rearrange(target, 'b t ta -> b (t ta)')
         # Regression task
         elif self.hparams.downstream_task_type == 'regression':
-            
-            logits = self.output_head(feature) # (b,1)
+            logits = self.output_head(feature) # 
+            if logits.ndim == 2:  # e.g. [20, 7]
+                logits = logits.unsqueeze(0)  # → [1, 20, 7]
             unnormalized_target = target_value.float() # (b,1)
-            
+
             if self.hparams.decoder == 'series_decoder': # (batch, T, E) -> (batch, T*E)
                 logits = logits.view(logits.size(0), -1)
                 unnormalized_target = unnormalized_target.view(unnormalized_target.size(0), -1)
@@ -181,7 +183,7 @@ class LitClassifier(pl.LightningModule):
                 target = (unnormalized_target - self.scaler.mean_[0]) / (self.scaler.scale_[0])
             elif self.hparams.label_scaling_method == 'minmax':
                 target = (unnormalized_target - self.scaler.data_min_[0]) / (self.scaler.data_max_[0] - self.scaler.data_min_[0])
-            
+
         return subj, logits, target
     
     def _calculate_loss(self, batch, mode):
@@ -213,151 +215,240 @@ class LitClassifier(pl.LightningModule):
         self.log_dict(result_dict, prog_bar=True, sync_dist=False, add_dataloader_idx=False, on_step=True, on_epoch=True, batch_size=self.hparams.batch_size)
         return loss
 
+   
     def _evaluate_metrics(self, subj_array, total_out, mode, best=False):
         """
-        Evaluates classification or regression metrics for aggregated subject-level predictions. 
-        Logs accuracy, balanced accuracy, and AUROC for classification tasks, and MSE, MAE, and correlation coefficients for regression tasks, including metrics on the original scale.
+        Evaluates regression metrics for aggregated subject-level predictions.
+        Applies to series_decoder where outputs are sequences.
         """
-        mode_str = mode if best == False else 'best_'+mode # kimbo change
+        mode_str = mode if not best else 'best_' + mode
         subjects = np.unique(subj_array)
         
         subj_avg_logits = []
         subj_targets = []
+
         for subj in subjects:
             subj_logits = [total_out[i][0] for i in range(len(subj_array)) if subj_array[i] == subj]
-            if self.hparams.decoder == 'series_decoder': # do not calculate the average logits
-                subj_avg_logits.append(subj_logits)
-            else:
-                subj_avg_logits.append(torch.mean(torch.stack(subj_logits), dim=0))
-            subj_targets.append([total_out[i][1] for i in range(len(subj_array)) if subj_array[i] == subj][0])
+            subj_target_seqs = [total_out[i][1] for i in range(len(subj_array)) if subj_array[i] == subj]
+
+
+            # 길이 맞추기
+            min_len = min(len(subj_logits), len(subj_target_seqs))
+            subj_logits = subj_logits[:min_len]
+            subj_target_seqs = subj_target_seqs[:min_len]
+
+            # 시퀀스 유지: [T, D]
+            subj_avg_logits.append(torch.stack(subj_logits))        # shape: [T, D]
+            subj_targets.append(torch.stack(subj_target_seqs))      # shape: [T, D] or [T]
+
+        # 스택해서 shape 확인 (B, T, D)
+        subj_avg_logits = torch.stack(subj_avg_logits)
+        subj_targets = torch.stack(subj_targets)
+
+        # flatten to [B, T * D]
+        subj_avg_logits = subj_avg_logits.reshape(subj_avg_logits.size(0), -1)
+        subj_targets = subj_targets.reshape(subj_targets.size(0), -1)
+
+
+        # ──────────────
+        # Metric 계산
+        # ──────────────
+        mse = F.mse_loss(subj_avg_logits, subj_targets)
+        mae = F.l1_loss(subj_avg_logits, subj_targets)
+
+        if self.hparams.label_scaling_method == 'standardization':
+            adjusted_mse = F.mse_loss(
+                subj_avg_logits * self.scaler.scale_[0] + self.scaler.mean_[0],
+                subj_targets * self.scaler.scale_[0] + self.scaler.mean_[0]
+            )
+            adjusted_mae = F.l1_loss(
+                subj_avg_logits * self.scaler.scale_[0] + self.scaler.mean_[0],
+                subj_targets * self.scaler.scale_[0] + self.scaler.mean_[0]
+            )
+        elif self.hparams.label_scaling_method == 'minmax':
+            adjusted_mse = F.mse_loss(
+                subj_avg_logits * (self.scaler.data_max_[0] - self.scaler.data_min_[0]) + self.scaler.data_min_[0],
+                subj_targets * (self.scaler.data_max_[0] - self.scaler.data_min_[0]) + self.scaler.data_min_[0]
+            )
+            adjusted_mae = F.l1_loss(
+                subj_avg_logits * (self.scaler.data_max_[0] - self.scaler.data_min_[0]) + self.scaler.data_min_[0],
+                subj_targets * (self.scaler.data_max_[0] - self.scaler.data_min_[0]) + self.scaler.data_min_[0]
+            )
+
+        pearson = PearsonCorrCoef()
+        r2_score = R2Score()
+        pearson_coef = pearson(subj_avg_logits.flatten(), subj_targets.flatten())
+        r2 = r2_score(subj_avg_logits.flatten(), subj_targets.flatten()) if len(subj_avg_logits) >= 2 else 0
+
+        # log
+        self.log(f"{mode_str}_corrcoef", pearson_coef, sync_dist=True)
+        self.log(f"{mode_str}_r2_score", r2, sync_dist=True)
+        self.log(f"{mode_str}_mse", mse, sync_dist=True)
+        self.log(f"{mode_str}_mae", mae, sync_dist=True)
+        self.log(f"{mode_str}_adjusted_mse", adjusted_mse, sync_dist=True)
+        self.log(f"{mode_str}_adjusted_mae", adjusted_mae, sync_dist=True)
+
+
+
+
+
+
+    # def _evaluate_metrics(self, subj_array, total_out, mode, best=False):
+    #     """
+    #     Evaluates classification or regression metrics for aggregated subject-level predictions. 
+    #     Logs accuracy, balanced accuracy, and AUROC for classification tasks, and MSE, MAE, and correlation coefficients for regression tasks, including metrics on the original scale.
+    #     """
+    #     mode_str = mode if best == False else 'best_'+mode # kimbo change
+    #     subjects = np.unique(subj_array)
+        
+    #     subj_avg_logits = []
+    #     subj_targets = []
+    #     for subj in subjects:
+    #         subj_logits = [total_out[i][0] for i in range(len(subj_array)) if subj_array[i] == subj]
+    #         if self.hparams.decoder == 'series_decoder': # do not calculate the average logits
+    #             subj_avg_logits.append(subj_logits)
+    #         else:
+    #             subj_avg_logits.append(torch.mean(torch.stack(subj_logits), dim=0))
+    #         subj_targets.append([total_out[i][1] for i in range(len(subj_array)) if subj_array[i] == subj][0])
     
-        if self.hparams.decoder == 'series_decoder':
-            subj_avg_logits = [i[0] for i in subj_avg_logits] # unpack single values from the list
-            subj_avg_logits = torch.stack(subj_avg_logits)
-            subj_targets = torch.stack(subj_targets)
-        else:
-            subj_avg_logits = torch.stack(subj_avg_logits)
-            subj_targets = torch.tensor(subj_targets)
+    #     if self.hparams.decoder == 'series_decoder':
+    #         subj_avg_logits = [i[0] for i in subj_avg_logits] # unpack single values from the list
+    #         subj_avg_logits = torch.stack(subj_avg_logits)
+    #         subj_targets = torch.stack(subj_targets)
+    #     else:
+    #         subj_avg_logits = torch.stack(subj_avg_logits)
+    #         subj_targets = torch.tensor(subj_targets)
     
-        if self.hparams.downstream_task_type == 'classification':
+    #     if self.hparams.downstream_task_type == 'classification':
             
-            if self.hparams.decoder == 'series_decoder':
-                subj_avg_logits = rearrange(subj_avg_logits, 'b tta c -> (b tta) c')
-                subj_targets = subj_targets.flatten()
+    #         if self.hparams.decoder == 'series_decoder':
+    #             subj_avg_logits = rearrange(subj_avg_logits, 'b tta c -> (b tta) c')
+    #             subj_targets = subj_targets.flatten()
                 
-            num_classes = subj_avg_logits.shape[1]
+    #         num_classes = subj_avg_logits.shape[1]
             
-            probabilities = F.softmax(subj_avg_logits.to(dtype=torch.float32), dim=1) # (b,num_classes), require 32 bit precision
-            predictions = probabilities.argmax(dim=1) # (b)
+    #         probabilities = F.softmax(subj_avg_logits.to(dtype=torch.float32), dim=1) # (b,num_classes), require 32 bit precision
+    #         predictions = probabilities.argmax(dim=1) # (b)
             
-            predictions_np = predictions.cpu().numpy()
-            targets_np = subj_targets.cpu().numpy()
+    #         predictions_np = predictions.cpu().numpy()
+    #         targets_np = subj_targets.cpu().numpy()
 
-            accuracy = accuracy_score(targets_np, predictions_np)
-            balanced_accuracy = balanced_accuracy_score(targets_np, predictions_np)
+    #         accuracy = accuracy_score(targets_np, predictions_np)
+    #         balanced_accuracy = balanced_accuracy_score(targets_np, predictions_np)
 
-            if num_classes == 2:
-                roc_auc = roc_auc_score(targets_np, predictions_np)
-            else: 
-                targets_one_hot = label_binarize(targets_np, classes=np.arange(num_classes))
-                roc_auc = roc_auc_score(targets_one_hot, probabilities.cpu().detach().numpy(), multi_class='ovr')
+    #         if num_classes == 2:
+    #             roc_auc = roc_auc_score(targets_np, predictions_np)
+    #         else: 
+    #             targets_one_hot = label_binarize(targets_np, classes=np.arange(num_classes))
+    #             roc_auc = roc_auc_score(targets_one_hot, probabilities.cpu().detach().numpy(), multi_class='ovr')
 
-            if self.hparams.decoder == 'series_decoder':
+    #         if self.hparams.decoder == 'series_decoder':
                 
-                # evaluate multiple targets separately
-                t = self.hparams.img_size[3]
+    #             # evaluate multiple targets separately
+    #             t = self.hparams.img_size[3]
 
-                subj_avg_logits = rearrange(subj_avg_logits, '(b t ta) c -> b t ta c', t=t, ta=self.hparams.num_targets, c=self.hparams.num_classes)
-                subj_targets = rearrange(subj_targets, '(b t ta) -> b t ta', t=t, ta=self.hparams.num_targets)
+    #             subj_avg_logits = rearrange(subj_avg_logits, '(b t ta) c -> b t ta c', t=t, ta=self.hparams.num_targets, c=self.hparams.num_classes)
+    #             subj_targets = rearrange(subj_targets, '(b t ta) -> b t ta', t=t, ta=self.hparams.num_targets)
             
-                for i in range(self.hparams.num_targets):
-                    logits_group = subj_avg_logits[:,:,i]  # Shape: [batch_size, temporal_size, num_classes]
-                    target_group = subj_targets[..., i]
+    #             for i in range(self.hparams.num_targets):
+    #                 logits_group = subj_avg_logits[:,:,i]  # Shape: [batch_size, temporal_size, num_classes]
+    #                 target_group = subj_targets[..., i]
                     
-                    probabilities = F.softmax(logits_group.to(dtype=torch.float32), dim=-1) # (b, temporal_size, num_classes), require 32 bit precision
-                    predictions = probabilities.argmax(dim=-1) # (b, temporal_size)
+    #                 probabilities = F.softmax(logits_group.to(dtype=torch.float32), dim=-1) # (b, temporal_size, num_classes), require 32 bit precision
+    #                 predictions = probabilities.argmax(dim=-1) # (b, temporal_size)
                     
-                    predictions_np = predictions.flatten().cpu().numpy()
-                    targets_np = target_group.flatten().cpu().numpy()
+    #                 predictions_np = predictions.flatten().cpu().numpy()
+    #                 targets_np = target_group.flatten().cpu().numpy()
                     
-                    accuracy_group = accuracy_score(targets_np, predictions_np)
-                    balanced_accuracy_group = balanced_accuracy_score(targets_np, predictions_np)
+    #                 accuracy_group = accuracy_score(targets_np, predictions_np)
+    #                 balanced_accuracy_group = balanced_accuracy_score(targets_np, predictions_np)
                     
-                    if num_classes == 2:
-                        roc_auc_group = roc_auc_score(targets_np, predictions_np)
-                    else: 
-                        targets_one_hot = label_binarize(targets_np, classes=np.arange(num_classes))
-                        roc_auc_group = roc_auc_score(targets_one_hot, rearrange(probabilities, 'b t c -> (b t) c').cpu().detach().numpy(), multi_class='ovr')
+    #                 if num_classes == 2:
+    #                     roc_auc_group = roc_auc_score(targets_np, predictions_np)
+    #                 else: 
+    #                     targets_one_hot = label_binarize(targets_np, classes=np.arange(num_classes))
+    #                     roc_auc_group = roc_auc_score(targets_one_hot, rearrange(probabilities, 'b t c -> (b t) c').cpu().detach().numpy(), multi_class='ovr')
                     
-                    self.log(f"{mode_str}_acc_{i}", accuracy_group, sync_dist=True)
-                    self.log(f"{mode_str}_balacc_{i}", balanced_accuracy_group, sync_dist=True)
-                    self.log(f"{mode_str}_AUROC_{i}", roc_auc_group, sync_dist=True)
+    #                 self.log(f"{mode_str}_acc_{i}", accuracy_group, sync_dist=True)
+    #                 self.log(f"{mode_str}_balacc_{i}", balanced_accuracy_group, sync_dist=True)
+    #                 self.log(f"{mode_str}_AUROC_{i}", roc_auc_group, sync_dist=True)
                 
-            self.log(f"{mode_str}_acc", accuracy, sync_dist=True)
-            self.log(f"{mode_str}_balacc", balanced_accuracy, sync_dist=True)
-            self.log(f"{mode_str}_AUROC", roc_auc, sync_dist=True)
+    #         self.log(f"{mode_str}_acc", accuracy, sync_dist=True)
+    #         self.log(f"{mode_str}_balacc", balanced_accuracy, sync_dist=True)
+    #         self.log(f"{mode_str}_AUROC", roc_auc, sync_dist=True)
  
-        # regression target is normalized
-        elif self.hparams.downstream_task_type == 'regression':
-            subj_avg_logits = subj_avg_logits.squeeze(-1)
-            mse = F.mse_loss(subj_avg_logits, subj_targets)
-            mae = F.l1_loss(subj_avg_logits, subj_targets)
+    #     # regression target is normalized
+    #     elif self.hparams.downstream_task_type == 'regression':
+    #         if self.hparams.decoder == 'series_decoder':
+    #             # flatten both if 3D
+    #             if subj_avg_logits.ndim > 2:
+    #                 subj_avg_logits = subj_avg_logits.reshape(subj_avg_logits.size(0), -1)
+    #             if subj_targets.ndim > 2:
+    #                 subj_targets = subj_targets.reshape(subj_targets.size(0), -1)
             
-            # reconstruct to original scale
-            if self.hparams.label_scaling_method == 'standardization': # default
-                adjusted_mse = F.mse_loss(subj_avg_logits * self.scaler.scale_[0] + self.scaler.mean_[0], subj_targets * self.scaler.scale_[0] + self.scaler.mean_[0])
-                adjusted_mae = F.l1_loss(subj_avg_logits * self.scaler.scale_[0] + self.scaler.mean_[0], subj_targets * self.scaler.scale_[0] + self.scaler.mean_[0])
-            elif self.hparams.label_scaling_method == 'minmax':
-                adjusted_mse = F.mse_loss(subj_avg_logits * (self.scaler.data_max_[0] - self.scaler.data_min_[0]) + self.scaler.data_min_[0], subj_targets * (self.scaler.data_max_[0] - self.scaler.data_min_[0]) + self.scaler.data_min_[0])
-                adjusted_mae = F.l1_loss(subj_avg_logits * (self.scaler.data_max_[0] - self.scaler.data_min_[0]) + self.scaler.data_min_[0], subj_targets * (self.scaler.data_max_[0] - self.scaler.data_min_[0]) + self.scaler.data_min_[0])
-            pearson = PearsonCorrCoef()
-            r2_score = R2Score()
-            
-            if self.hparams.decoder == 'series_decoder':
-                pearson_coef = pearson(subj_avg_logits.flatten(), subj_targets.flatten())
-                r2 = r2_score(subj_avg_logits.flatten(), subj_targets.flatten()) if len(subj_avg_logits) >=2 else 0
-            else:
-                pearson_coef = pearson(subj_avg_logits, subj_targets)
-                r2 = r2_score(subj_avg_logits, subj_targets) if len(subj_avg_logits) >=2 else 0
-            
-            if self.hparams.decoder == 'series_decoder':
-                
-                # evaluate multiple targets separately
-                t = self.hparams.img_size[3]
-            
-                subj_avg_logits = subj_avg_logits.view(-1, t ,self.hparams.num_targets) # (b, t*num_targets) -> (b, t, num_targets)
-                subj_targets = subj_targets.view(-1, t ,self.hparams.num_targets) # (b, t*num_targets) -> (b, t, num_targets)
-            
-                for i in range(self.hparams.num_targets):
-                    logits_group = subj_avg_logits[..., i]  # Shape: [batch_size, temporal_size]
-                    target_group = subj_targets[..., i]
-                
-                    mse_group = F.mse_loss(logits_group, target_group)  # target is float
-                    mae_group = F.l1_loss(logits_group, target_group)
-                
-                    pearson_coef_group = pearson(logits_group.flatten(), target_group.flatten())
-                    r2_group = r2_score(logits_group.flatten(), target_group.flatten()) 
+    #         print("🟩 logits shape before mse:", subj_avg_logits.shape)
+    #         print("🟩 targets shape before mse:", subj_targets.shape)
 
-                    if self.hparams.label_scaling_method == 'standardization': # default
-                        adjusted_mse_group = F.mse_loss(logits_group * self.scaler.scale_[0] + self.scaler.mean_[0], target_group * self.scaler.scale_[0] + self.scaler.mean_[0])
-                        adjusted_mae_group = F.l1_loss(logits_group * self.scaler.scale_[0] + self.scaler.mean_[0], target_group * self.scaler.scale_[0] + self.scaler.mean_[0])
-                    elif self.hparams.label_scaling_method == 'minmax':
-                        adjusted_mse_group = F.mse_loss(logits_group * (self.scaler.data_max_[0] - self.scaler.data_min_[0]) + self.scaler.data_min_[0], target_group * (self.scaler.data_max_[0] - self.scaler.data_min_[0]) + self.scaler.data_min_[0])
-                        adjusted_mae_group = F.l1_loss(logits_group * (self.scaler.data_max_[0] - self.scaler.data_min_[0]) + self.scaler.data_min_[0], target_group * (self.scaler.data_max_[0] - self.scaler.data_min_[0]) + self.scaler.data_min_[0])
 
-                    self.log(f"{mode_str}_corrcoef_{i}", pearson_coef_group, sync_dist=True)
-                    self.log(f"{mode_str}_r2_score_{i}", r2_group, sync_dist=True)
-                    self.log(f"{mode_str}_mse_{i}", mse_group, sync_dist=True)
-                    self.log(f"{mode_str}_mae_{i}", mae_group, sync_dist=True)
-                    self.log(f"{mode_str}_adjusted_mse_{i}", adjusted_mse_group, sync_dist=True)
-                    self.log(f"{mode_str}_adjusted_mae_{i}", adjusted_mae_group, sync_dist=True)
+    #         # subj_avg_logits = subj_avg_logits.squeeze(-1)
+    #         mse = F.mse_loss(subj_avg_logits, subj_targets)
+    #         mae = F.l1_loss(subj_avg_logits, subj_targets)
             
-            self.log(f"{mode_str}_corrcoef", pearson_coef, sync_dist=True)
-            self.log(f"{mode_str}_r2_score", r2, sync_dist=True)
-            self.log(f"{mode_str}_mse", mse, sync_dist=True)
-            self.log(f"{mode_str}_mae", mae, sync_dist=True)
-            self.log(f"{mode_str}_adjusted_mse", adjusted_mse, sync_dist=True) 
-            self.log(f"{mode_str}_adjusted_mae", adjusted_mae, sync_dist=True)
+    #         # reconstruct to original scale
+    #         if self.hparams.label_scaling_method == 'standardization': # default
+    #             adjusted_mse = F.mse_loss(subj_avg_logits * self.scaler.scale_[0] + self.scaler.mean_[0], subj_targets * self.scaler.scale_[0] + self.scaler.mean_[0])
+    #             adjusted_mae = F.l1_loss(subj_avg_logits * self.scaler.scale_[0] + self.scaler.mean_[0], subj_targets * self.scaler.scale_[0] + self.scaler.mean_[0])
+    #         elif self.hparams.label_scaling_method == 'minmax':
+    #             adjusted_mse = F.mse_loss(subj_avg_logits * (self.scaler.data_max_[0] - self.scaler.data_min_[0]) + self.scaler.data_min_[0], subj_targets * (self.scaler.data_max_[0] - self.scaler.data_min_[0]) + self.scaler.data_min_[0])
+    #             adjusted_mae = F.l1_loss(subj_avg_logits * (self.scaler.data_max_[0] - self.scaler.data_min_[0]) + self.scaler.data_min_[0], subj_targets * (self.scaler.data_max_[0] - self.scaler.data_min_[0]) + self.scaler.data_min_[0])
+    #         pearson = PearsonCorrCoef()
+    #         r2_score = R2Score()
+            
+    #         if self.hparams.decoder == 'series_decoder':
+    #             pearson_coef = pearson(subj_avg_logits.flatten(), subj_targets.flatten())
+    #             r2 = r2_score(subj_avg_logits.flatten(), subj_targets.flatten()) if len(subj_avg_logits) >=2 else 0
+    #         else:
+    #             pearson_coef = pearson(subj_avg_logits, subj_targets)
+    #             r2 = r2_score(subj_avg_logits, subj_targets) if len(subj_avg_logits) >=2 else 0
+            
+    #         if self.hparams.decoder == 'series_decoder':
+                
+    #             # evaluate multiple targets separately
+    #             t = self.hparams.img_size[3]
+            
+    #             subj_avg_logits = subj_avg_logits.view(-1, t ,self.hparams.num_targets) # (b, t*num_targets) -> (b, t, num_targets)
+    #             subj_targets = subj_targets.view(-1, t ,self.hparams.num_targets) # (b, t*num_targets) -> (b, t, num_targets)
+            
+    #             for i in range(self.hparams.num_targets):
+    #                 logits_group = subj_avg_logits[..., i]  # Shape: [batch_size, temporal_size]
+    #                 target_group = subj_targets[..., i]
+                
+    #                 mse_group = F.mse_loss(logits_group, target_group)  # target is float
+    #                 mae_group = F.l1_loss(logits_group, target_group)
+                
+    #                 pearson_coef_group = pearson(logits_group.flatten(), target_group.flatten())
+    #                 r2_group = r2_score(logits_group.flatten(), target_group.flatten()) 
+
+    #                 if self.hparams.label_scaling_method == 'standardization': # default
+    #                     adjusted_mse_group = F.mse_loss(logits_group * self.scaler.scale_[0] + self.scaler.mean_[0], target_group * self.scaler.scale_[0] + self.scaler.mean_[0])
+    #                     adjusted_mae_group = F.l1_loss(logits_group * self.scaler.scale_[0] + self.scaler.mean_[0], target_group * self.scaler.scale_[0] + self.scaler.mean_[0])
+    #                 elif self.hparams.label_scaling_method == 'minmax':
+    #                     adjusted_mse_group = F.mse_loss(logits_group * (self.scaler.data_max_[0] - self.scaler.data_min_[0]) + self.scaler.data_min_[0], target_group * (self.scaler.data_max_[0] - self.scaler.data_min_[0]) + self.scaler.data_min_[0])
+    #                     adjusted_mae_group = F.l1_loss(logits_group * (self.scaler.data_max_[0] - self.scaler.data_min_[0]) + self.scaler.data_min_[0], target_group * (self.scaler.data_max_[0] - self.scaler.data_min_[0]) + self.scaler.data_min_[0])
+
+    #                 self.log(f"{mode_str}_corrcoef_{i}", pearson_coef_group, sync_dist=True)
+    #                 self.log(f"{mode_str}_r2_score_{i}", r2_group, sync_dist=True)
+    #                 self.log(f"{mode_str}_mse_{i}", mse_group, sync_dist=True)
+    #                 self.log(f"{mode_str}_mae_{i}", mae_group, sync_dist=True)
+    #                 self.log(f"{mode_str}_adjusted_mse_{i}", adjusted_mse_group, sync_dist=True)
+    #                 self.log(f"{mode_str}_adjusted_mae_{i}", adjusted_mae_group, sync_dist=True)
+            
+    #         self.log(f"{mode_str}_corrcoef", pearson_coef, sync_dist=True)
+    #         self.log(f"{mode_str}_r2_score", r2, sync_dist=True)
+    #         self.log(f"{mode_str}_mse", mse, sync_dist=True)
+    #         self.log(f"{mode_str}_mae", mae, sync_dist=True)
+    #         self.log(f"{mode_str}_adjusted_mse", adjusted_mse, sync_dist=True) 
+    #         self.log(f"{mode_str}_adjusted_mae", adjusted_mae, sync_dist=True)
 
 
     def training_step(self, batch, batch_idx):
