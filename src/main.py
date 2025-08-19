@@ -177,7 +177,8 @@ def cli_main():
                 resume="allow",                    # 기존 run을 이어붙이겠다는 의미
                 config=vars(args),
                 save_dir=args.default_root_dir,
-                tags=tags
+                tags=tags, 
+                log_model=False
             )
 
         else: 

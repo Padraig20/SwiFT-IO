@@ -31,3 +31,7 @@ data_behavior
 wandb
 
 artifacts
+
+output/moviefmri/wandb
+
+lightning_logs/
