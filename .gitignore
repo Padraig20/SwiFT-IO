@@ -35,3 +35,5 @@ artifacts
 output/moviefmri/wandb
 
 lightning_logs/
+
+src/runs

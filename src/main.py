@@ -159,8 +159,32 @@ def cli_main():
         wandb.login(key=API_KEY)  # W&B 로그인 (생략 가능)
 
         tags = [] # kimbo change
-        if args.experiment_name is not None:
+        if args.experiment_name:
             tags.append(args.experiment_name)
+
+        # 핵심 실험 조건
+        tags.append(f"task={args.downstream_task}")
+        tags.append(f"type={args.downstream_task_type}")
+        tags.append(f"seq_len={args.sequence_length}")
+        tags.append(f"model={args.model}")
+        tags.append(f"dataset={args.dataset_name}")
+        tags.append(f"seed={args.seed}")
+
+        # HRF 관련
+        if getattr(args, "adjust_hrf", False):
+            tags.append("adjust_hrf")
+        tags.append(f"input_offset={getattr(args, 'input_offset', 'NA')}")
+
+        # 데이터 스플릿/설계 관련(있을 때만)
+        if hasattr(args, "dataset_split_seed"):
+            tags.append(f"split_seed={args.dataset_split_seed}")
+        if hasattr(args, "stratified_params") and args.stratified_params:
+            tags.append(f"stratified={args.stratified_params}")
+
+        # Slurm 환경이면 JobID 태그 추가
+        if "SLURM_JOB_ID" in os.environ:
+            tags.append(f"jobid={os.environ['SLURM_JOB_ID']}")
+
         if args.valid_only:
             tags.append("valid_only")
         if args.test_only:
@@ -188,7 +212,8 @@ def cli_main():
                 name=args.experiment_name if hasattr(args, "experiment_name") else None,
                 config=vars(args),
                 save_dir=args.default_root_dir,  # 로그 저장 경로 설정
-                tags=tags
+                tags=tags, 
+                log_model=False
             )
         
         # Lightning에서 사용할 logger 객체로 교체

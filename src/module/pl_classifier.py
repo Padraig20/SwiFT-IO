@@ -24,6 +24,20 @@ from sklearn.preprocessing import StandardScaler, MinMaxScaler
 import wandb 
 import copy
 import pdb
+
+import torch
+# --- 필요한 모든 torchmetrics 임포트 ---
+from torchmetrics.classification import (
+    AUROC, 
+    Precision, 
+    Recall, 
+    F1Score, 
+    MatthewsCorrCoef, 
+    AveragePrecision
+)
+from torchmetrics.regression import PearsonCorrCoef, R2Score
+
+
 class LitClassifier(pl.LightningModule):
     
     def __init__(self,data_module, **kwargs):
@@ -157,17 +171,17 @@ class LitClassifier(pl.LightningModule):
 
         if augment_during_training:
             if mode == 'train': # kimbo change
-                fmri = self.augment(fmri)
+                fmri = self.augment(fmri) # torch.Size([2, 1, 96, 96, 96, 30])
 
-        feature = self.model(fmri)
-
+        feature = self.model(fmri) # torch.Size([2, 768, 120])
+        # TODO: shape 확인. 
         # Classification task
         if self.hparams.downstream_task_type == 'classification':
-            logits = self.output_head(feature).squeeze() # (b,num_classes)  /  (b,t,num_targets,num_classes)
-            target = target_value.float().squeeze()      # (b,num_classes)  /  (b,t,num_targets,num_classes)
-            if self.hparams.decoder == 'series_decoder':
-                logits = rearrange(logits, 'b t ta c -> b (t ta) c')
-                target = rearrange(target, 'b t ta -> b (t ta)')
+            logits = self.output_head(feature).squeeze() # (b,num_classes)  /  (b,t,num_targets,num_classes) # torch.Size([2, 30, 7, 2]) (output_head(feature): torch.Size([2, 30, 7, 2]))
+            target = target_value.float().squeeze()      # (b,num_classes)  /  (b,t,num_targets,num_classes) # torch.Size([2, 30, 7])
+            if self.hparams.decoder == 'series_decoder': 
+                logits = rearrange(logits, 'b t ta c -> b (t ta) c') # torch.Size([2, 210, 2])
+                target = rearrange(target, 'b t ta -> b (t ta)') # torch.Size([2, 210])
         # Regression task
         elif self.hparams.downstream_task_type == 'regression':
             logits = self.output_head(feature) # 
@@ -195,15 +209,37 @@ class LitClassifier(pl.LightningModule):
 
         if self.hparams.downstream_task_type == 'classification':
             if self.hparams.decoder == 'series_decoder': # [b, (t ta), c] -> [(b t ta), c]
-                logits = rearrange(logits, 'b tta c -> (b tta) c')
-                target = target.flatten() # (b,c) -> (b*c)
-            loss = F.cross_entropy(logits, target.long()) # target is float
-            acc = self.metric.get_accuracy(logits, target.float().squeeze())
+                logits = rearrange(logits, 'b tta c -> (b tta) c') # torch.Size([420, 2])
+                target = target.flatten() # (b,tta) -> (b*tta) # torch.Size([420])
+            # ---- Unified binary/multiclass handling ----
+            num_classes = logits.size(-1)
+            if num_classes == 2 and self.hparams.num_classes == 2: 
+                # Binary classification with BCEWithLogitsLoss
+                # Convert 2-logits to a single logit (log-odds): logit_pos - logit_neg
+                binary_logit = logits[:, 1] - logits[:, 0]  # shape: [N]
+                target_f = target.float()
+
+                # Optional positive class weight for imbalance
+                pos_weight = getattr(self.hparams.pos_weight, "pos_weight", None)
+                if pos_weight is not None and not torch.is_tensor(pos_weight):
+                    pos_weight = torch.tensor(pos_weight, device=logits.device, dtype=logits.dtype)
+
+                if pos_weight is not None:
+                    loss = F.binary_cross_entropy_with_logits(binary_logit, target_f, pos_weight=pos_weight)
+                else:
+                    loss = F.binary_cross_entropy_with_logits(binary_logit, target_f)
+
+                # Accuracy: sigmoid(logit)>0.5 <=> logit>0
+                pred = (binary_logit > 0).long()
+                acc = (pred == target.long()).float().mean()
+            else: 
+                # CrossEntropy for binary (C=2) or multiclass (C>=3)
+                loss = F.cross_entropy(logits, target.long()) # target is float
+                acc = self.metric.get_accuracy(logits, target.float().squeeze())
             result_dict = {
                 f"{mode}_loss": loss,
                 f"{mode}_acc": acc,
             }
-
         elif self.hparams.downstream_task_type == 'regression':
             loss = F.mse_loss(logits.squeeze(), target.squeeze())
             l1 = F.l1_loss(logits.squeeze(), target.squeeze())
@@ -215,240 +251,261 @@ class LitClassifier(pl.LightningModule):
         self.log_dict(result_dict, prog_bar=True, sync_dist=False, add_dataloader_idx=False, on_step=True, on_epoch=True, batch_size=self.hparams.batch_size)
         return loss
 
-   
-    def _evaluate_metrics(self, subj_array, total_out, mode, best=False):
+    def _best_threshold_youden(self, pos_scores: torch.Tensor, y_true: torch.Tensor):
         """
-        Evaluates regression metrics for aggregated subject-level predictions.
-        Applies to series_decoder where outputs are sequences.
+        pos_scores: (N,) 양성 클래스 점수(확률) [0,1]
+        y_true:     (N,) {0,1}
+        return: best_threshold(float), best_J(float), tpr_at_best(float), fpr_at_best(float)
         """
-        mode_str = mode if not best else 'best_' + mode
+        with torch.no_grad():
+            # 정렬(내림차순): 점수가 높을수록 양성
+            scores, idx = torch.sort(pos_scores.detach().flatten().cpu(), descending=True)
+            y = y_true.detach().flatten().cpu().to(torch.int64)
+            y = y[idx]
+
+            P = int((y == 1).sum().item())
+            N = int((y == 0).sum().item())
+            if P == 0 or N == 0:
+                # 한 클래스만 있으면 의미있는 ROC 불가 → 기본값
+                return 0.5, 0.0, 0.0, 0.0
+
+            # 누적 양성/음성: threshold를 scores[k]로 잡으면, 상위 k개를 양성으로 분류
+            tp_cum = torch.cumsum((y == 1).to(torch.int64), dim=0)            # 길이 N
+            fp_cum = torch.cumsum((y == 0).to(torch.int64), dim=0)
+
+            # 각 지점에서의 TPR/FPR
+            tpr = tp_cum.to(torch.float64) / P
+            fpr = fp_cum.to(torch.float64) / N
+            J = tpr - fpr
+
+            # 같은 점수에서는 한 번만 평가(불필요한 중복 제거)
+            # unique scores의 첫 인덱스만 사용
+            uniq_scores, uniq_idx = torch.unique_consecutive(scores, return_counts=False, return_inverse=False, dim=0, return_indices=True)
+            tpr_u = tpr[uniq_idx]
+            fpr_u = fpr[uniq_idx]
+            J_u = tpr_u - fpr_u
+
+            best_i = int(torch.argmax(J_u).item())
+            best_thr = float(uniq_scores[best_i].item())
+            return best_thr, float(J_u[best_i].item()), float(tpr_u[best_i].item()), float(fpr_u[best_i].item())
+
+    def _evaluate_metrics(self, subj_array, total_out, mode):
+        """
+        Evaluates classification or regression metrics for aggregated subject-level predictions.
+        """
         subjects = np.unique(subj_array)
-        
-        subj_avg_logits = []
-        subj_targets = []
 
-        for subj in subjects:
-            subj_logits = [total_out[i][0] for i in range(len(subj_array)) if subj_array[i] == subj]
-            subj_target_seqs = [total_out[i][1] for i in range(len(subj_array)) if subj_array[i] == subj]
+        # 0) 공용 헬퍼: subject별로 모든 seq을 시간축으로 합쳐서 반환
+        def _build_subj_tensors_varlen(subj_array, total_out, subjects, t, ta, C):
+            """
+            Returns:
+                subj_logits_list_by_subj: list of tensors, each [T_total_s, ta, C]
+                subj_targets_list_by_subj: list of tensors, each [T_total_s, ta]
+                kept_subjects: list of subject ids aligned with lists above
+            Note:
+                각 subject마다 T_total_s(=시퀀스수*t)가 달라도 OK.
+            """
+            subj_logits_list_by_subj  = []
+            subj_targets_list_by_subj = []
+            kept_subjects = []
 
+            for subj in subjects:
+                # 이 subject의 모든 시퀀스 모으기
+                subj_logits_seqs  = [total_out[i][0] for i in range(len(subj_array)) if subj_array[i] == subj]  # 각 [t*ta, C]
+                subj_targets_seqs = [total_out[i][1] for i in range(len(subj_array)) if subj_array[i] == subj]  # 각 [t*ta]
+                if len(subj_logits_seqs) == 0:
+                    continue  # 시퀀스 없으면 스킵
 
-            # 길이 맞추기
-            min_len = min(len(subj_logits), len(subj_target_seqs))
-            subj_logits = subj_logits[:min_len]
-            subj_target_seqs = subj_target_seqs[:min_len]
+                # [t, ta, C] / [t, ta]로 복원 후 시간축 cat
+                seq_logits_3d  = [x.view(t, ta, C) for x in subj_logits_seqs]
+                seq_targets_2d = [y.view(t, ta)    for y in subj_targets_seqs]
+                logits_cat_3d  = torch.cat(seq_logits_3d,  dim=0)  # [T_total_s, ta, C]
+                targets_cat_2d = torch.cat(seq_targets_2d, dim=0)  # [T_total_s, ta]
 
-            # 시퀀스 유지: [T, D]
-            subj_avg_logits.append(torch.stack(subj_logits))        # shape: [T, D]
-            subj_targets.append(torch.stack(subj_target_seqs))      # shape: [T, D] or [T]
+                subj_logits_list_by_subj.append(logits_cat_3d)
+                subj_targets_list_by_subj.append(targets_cat_2d)
+                kept_subjects.append(subj)
 
-        # 스택해서 shape 확인 (B, T, D)
-        subj_avg_logits = torch.stack(subj_avg_logits)
-        subj_targets = torch.stack(subj_targets)
-
-        # flatten to [B, T * D]
-        subj_avg_logits = subj_avg_logits.reshape(subj_avg_logits.size(0), -1)
-        subj_targets = subj_targets.reshape(subj_targets.size(0), -1)
-
-
-        # ──────────────
-        # Metric 계산
-        # ──────────────
-        mse = F.mse_loss(subj_avg_logits, subj_targets)
-        mae = F.l1_loss(subj_avg_logits, subj_targets)
-
-        if self.hparams.label_scaling_method == 'standardization':
-            adjusted_mse = F.mse_loss(
-                subj_avg_logits * self.scaler.scale_[0] + self.scaler.mean_[0],
-                subj_targets * self.scaler.scale_[0] + self.scaler.mean_[0]
-            )
-            adjusted_mae = F.l1_loss(
-                subj_avg_logits * self.scaler.scale_[0] + self.scaler.mean_[0],
-                subj_targets * self.scaler.scale_[0] + self.scaler.mean_[0]
-            )
-        elif self.hparams.label_scaling_method == 'minmax':
-            adjusted_mse = F.mse_loss(
-                subj_avg_logits * (self.scaler.data_max_[0] - self.scaler.data_min_[0]) + self.scaler.data_min_[0],
-                subj_targets * (self.scaler.data_max_[0] - self.scaler.data_min_[0]) + self.scaler.data_min_[0]
-            )
-            adjusted_mae = F.l1_loss(
-                subj_avg_logits * (self.scaler.data_max_[0] - self.scaler.data_min_[0]) + self.scaler.data_min_[0],
-                subj_targets * (self.scaler.data_max_[0] - self.scaler.data_min_[0]) + self.scaler.data_min_[0]
-            )
-
-        pearson = PearsonCorrCoef()
-        r2_score = R2Score()
-        pearson_coef = pearson(subj_avg_logits.flatten(), subj_targets.flatten())
-        r2 = r2_score(subj_avg_logits.flatten(), subj_targets.flatten()) if len(subj_avg_logits) >= 2 else 0
-
-        # log
-        self.log(f"{mode_str}_corrcoef", pearson_coef, sync_dist=True)
-        self.log(f"{mode_str}_r2_score", r2, sync_dist=True)
-        self.log(f"{mode_str}_mse", mse, sync_dist=True)
-        self.log(f"{mode_str}_mae", mae, sync_dist=True)
-        self.log(f"{mode_str}_adjusted_mse", adjusted_mse, sync_dist=True)
-        self.log(f"{mode_str}_adjusted_mae", adjusted_mae, sync_dist=True)
+            return subj_logits_list_by_subj, subj_targets_list_by_subj, kept_subjects
 
 
 
+        if self.hparams.downstream_task_type == 'classification':
+            t  = self.hparams.img_size[3]       # 예: 30
+            ta = self.hparams.num_targets       # 예: 7
+            C  = self.hparams.num_classes       # 예: 2
+            subj_logits_list_by_subj, subj_targets_list_by_subj, kept_subjects = \
+                _build_subj_tensors_varlen(subj_array, total_out, subjects, t, ta, C)
+
+            if len(subj_logits_list_by_subj) == 0:
+                # 이 배치/랭크에서 평가할 게 없으면 안전 탈출(로그만 남김)
+                self.log(f"{mode}_acc", float('nan'), sync_dist=True)
+                self.log(f"{mode}_balacc", float('nan'), sync_dist=True)
+                return torch.tensor(0.0, device=next(self.parameters()).device)
+
+            # A-2: 전역(time-step) 지표 계산용 평탄화 (varlen → 리스트 cat)
+            # logits_all: [(sum_s T_total_s * ta), C], targets_all: [(sum_s T_total_s * ta)]
+            logits_flat_list  = [L.reshape(-1, C) for L in subj_logits_list_by_subj]      # 각 [T_total_s*ta, C]
+            targets_flat_list = [Y.reshape(-1)    for Y in subj_targets_list_by_subj]     # 각 [T_total_s*ta]
+            logits_all  = torch.cat(logits_flat_list,  dim=0)
+            targets_all = torch.cat(targets_flat_list, dim=0)
+
+            with torch.no_grad():
+                probs_all = torch.softmax(logits_all.to(dtype=torch.float32), dim=-1)   # [(Σ T_s*ta), C]
+                preds_all = probs_all.argmax(dim=-1)                                     # [(Σ T_s*ta)]
+                y_np = targets_all.cpu().numpy()
+                p_np = preds_all.cpu().numpy()
+                from sklearn.metrics import accuracy_score, balanced_accuracy_score
+                acc = accuracy_score(y_np, p_np)
+                bal = balanced_accuracy_score(y_np, p_np)
+
+            self.log(f"{mode}_acc", acc, sync_dist=True)
+            self.log(f"{mode}_balacc", bal, sync_dist=True)
+
+            # (선택) multi-target per-i 지표
+            if (self.hparams.decoder in ['series_decoder','multi_target_decoder']) and self.hparams.num_targets > 1:
+                from sklearn.metrics import accuracy_score, balanced_accuracy_score, roc_auc_score, average_precision_score
+                for i in range(ta):
+                    lg_list = [L[:, i, :].reshape(-1, C) for L in subj_logits_list_by_subj]  # 각 [T_total_s, C]
+                    tg_list = [Y[:, i].reshape(-1)      for Y in subj_targets_list_by_subj]  # 각 [T_total_s]
+                    lg = torch.cat(lg_list, dim=0)  # [(Σ T_s), C]
+                    tg = torch.cat(tg_list, dim=0)  # [(Σ T_s)]
+
+                    probs = torch.softmax(lg.to(dtype=torch.float32), dim=-1)
+                    preds = probs.argmax(dim=-1)
+
+                    y_i = tg.cpu().numpy()
+                    p_i = preds.cpu().numpy()
+                    acc_i = accuracy_score(y_i, p_i)
+                    bal_i = balanced_accuracy_score(y_i, p_i)
+
+                    if C == 2 and np.unique(y_i).size == 2:
+                        scores_i = (lg[:, 1] - lg[:, 0]).detach().cpu().numpy()
+                        auroc_i  = roc_auc_score(y_i, scores_i)
+                        auprc_i  = average_precision_score(y_i, scores_i)
+                    else:
+                        auroc_i = np.nan
+                        auprc_i = np.nan
+
+                    self.log(f"{mode}_acc_{i}", acc_i, sync_dist=True)
+                    self.log(f"{mode}_balacc_{i}", bal_i, sync_dist=True)
+                    self.log(f"{mode}_AUROC_{i}", auroc_i, sync_dist=True)
+                    self.log(f"{mode}_AUPRC_{i}", auprc_i, sync_dist=True)
+        elif self.hparams.downstream_task_type == 'regression':
+            # --- 공통 하이퍼/헬퍼 호출 (가변 길이 지원) ---
+            t  = self.hparams.img_size[3]                # window length (e.g., 30)
+            ta = self.hparams.num_targets               # #targets per time step
+            # 회귀의 경우 보통 마지막 채널은 1이지만, 방어적으로 C를 받아둠
+            C  = getattr(self.hparams, "num_classes", 1)
+
+            # subject별: [T_total_s, ta, C], [T_total_s, ta] 의 리스트 반환
+            subj_logits_list_by_subj, subj_targets_list_by_subj, kept_subjects = \
+                _build_subj_tensors_varlen(subj_array, total_out, subjects, t, ta, C)
+
+            # 평가할 샘플이 없으면 안전 탈출(로그만 남김)
+            if len(subj_logits_list_by_subj) == 0:
+                self.log(f"{mode}_mse", float('nan'), sync_dist=True)
+                self.log(f"{mode}_mae", float('nan'), sync_dist=True)
+                self.log(f"{mode}_corrcoef", float('nan'), sync_dist=True)
+                self.log(f"{mode}_r2_score", float('nan'), sync_dist=True)
+                self.log(f"{mode}_adjusted_mse", float('nan'), sync_dist=True)
+                self.log(f"{mode}_adjusted_mae", float('nan'), sync_dist=True)
+                return torch.tensor(0.0, device=next(self.parameters()).device)
+
+            # --- 전역(time-step) 평가용 cat (가변 길이 → 리스트 cat) ---
+            # logits_all: [(Σ_s T_total_s), ta], targets_all: [(Σ_s T_total_s), ta]
+            logits_all_list  = []
+            targets_all_list = []
+            for L, Y in zip(subj_logits_list_by_subj, subj_targets_list_by_subj):
+                # L: [T_total_s, ta, C], Y: [T_total_s, ta]
+                # 회귀헤드가 C==1이면 squeeze, 혹 C>1이면 첫 채널만 사용(필요 시 맞게 수정)
+                if L.size(-1) == 1:
+                    L2 = L.squeeze(-1)                    # [T_total_s, ta]
+                else:
+                    L2 = L[..., 0]                        # [T_total_s, ta]  (혹은 원하는 채널 선택/평균)
+                logits_all_list.append(L2.reshape(-1, ta))
+                targets_all_list.append(Y.reshape(-1, ta))
+
+            logits_all  = torch.cat(logits_all_list,  dim=0)   # [(Σ T_s), ta]
+            targets_all = torch.cat(targets_all_list, dim=0)   # [(Σ T_s), ta]
+
+            # --- 기본 회귀 지표(전역) ---
+            mse = F.mse_loss(logits_all, targets_all)
+            mae = F.l1_loss(logits_all, targets_all)
+
+            # 스케일 복원(원척도 지표)
+            if self.hparams.label_scaling_method == 'standardization':
+                l_adj = logits_all * self.scaler.scale_[0] + self.scaler.mean_[0]
+                y_adj = targets_all * self.scaler.scale_[0] + self.scaler.mean_[0]
+            elif self.hparams.label_scaling_method == 'minmax':
+                rng = (self.scaler.data_max_[0] - self.scaler.data_min_[0])
+                l_adj = logits_all * rng + self.scaler.data_min_[0]
+                y_adj = targets_all * rng + self.scaler.data_min_[0]
+            else:
+                l_adj = logits_all
+                y_adj = targets_all
+
+            adjusted_mse = F.mse_loss(l_adj, y_adj)
+            adjusted_mae = F.l1_loss(l_adj, y_adj)
+
+            # 상관/설명력 (전역)
+            pearson = PearsonCorrCoef()
+            r2_score = R2Score()
+            # numel 보호(샘플 1개면 r2 정의 X)
+            if logits_all.numel() >= 2:
+                pearson_coef = pearson(logits_all.flatten(), targets_all.flatten())
+                r2 = r2_score(logits_all.flatten(), targets_all.flatten())
+            else:
+                pearson_coef = torch.tensor(0.0, device=logits_all.device, dtype=logits_all.dtype)
+                r2 = torch.tensor(0.0, device=logits_all.device, dtype=logits_all.dtype)
+
+            # --- 멀티 타깃일 경우 타깃별 지표 로그(선택) ---
+            if ta > 1:
+                for i in range(ta):
+                    l_i = logits_all[:, i]
+                    y_i = targets_all[:, i]
+
+                    mse_i = F.mse_loss(l_i, y_i)
+                    mae_i = F.l1_loss(l_i, y_i)
+
+                    # 원척도 복원
+                    if self.hparams.label_scaling_method == 'standardization':
+                        l_i_adj = l_i * self.scaler.scale_[0] + self.scaler.mean_[0]
+                        y_i_adj = y_i * self.scaler.scale_[0] + self.scaler.mean_[0]
+                    elif self.hparams.label_scaling_method == 'minmax':
+                        rng = (self.scaler.data_max_[0] - self.scaler.data_min_[0])
+                        l_i_adj = l_i * rng + self.scaler.data_min_[0]
+                        y_i_adj = y_i * rng + self.scaler.data_min_[0]
+                    else:
+                        l_i_adj, y_i_adj = l_i, y_i
+
+                    adjusted_mse_i = F.mse_loss(l_i_adj, y_i_adj)
+                    adjusted_mae_i = F.l1_loss(l_i_adj, y_i_adj)
+
+                    # 상관/설명력(타깃별)
+                    if l_i.numel() >= 2:
+                        pearson_i = pearson(l_i, y_i)
+                        r2_i = r2_score(l_i, y_i)
+                    else:
+                        pearson_i = torch.tensor(0.0, device=l_i.device, dtype=l_i.dtype)
+                        r2_i = torch.tensor(0.0, device=l_i.device, dtype=l_i.dtype)
+
+                    self.log(f"{mode}_mse_{i}", mse_i, sync_dist=True)
+                    self.log(f"{mode}_mae_{i}", mae_i, sync_dist=True)
+                    self.log(f"{mode}_adjusted_mse_{i}", adjusted_mse_i, sync_dist=True)
+                    self.log(f"{mode}_adjusted_mae_{i}", adjusted_mae_i, sync_dist=True)
+                    self.log(f"{mode}_corrcoef_{i}", pearson_i, sync_dist=True)
+                    self.log(f"{mode}_r2_score_{i}", r2_i, sync_dist=True)
+
+            # --- 전역 로그 ---
+            self.log(f"{mode}_mse", mse, sync_dist=True)
+            self.log(f"{mode}_mae", mae, sync_dist=True)
+            self.log(f"{mode}_adjusted_mse", adjusted_mse, sync_dist=True)
+            self.log(f"{mode}_adjusted_mae", adjusted_mae, sync_dist=True)
+            self.log(f"{mode}_corrcoef", pearson_coef, sync_dist=True)
+            self.log(f"{mode}_r2_score", r2, sync_dist=True)
 
 
-
-    # def _evaluate_metrics(self, subj_array, total_out, mode, best=False):
-    #     """
-    #     Evaluates classification or regression metrics for aggregated subject-level predictions. 
-    #     Logs accuracy, balanced accuracy, and AUROC for classification tasks, and MSE, MAE, and correlation coefficients for regression tasks, including metrics on the original scale.
-    #     """
-    #     mode_str = mode if best == False else 'best_'+mode # kimbo change
-    #     subjects = np.unique(subj_array)
-        
-    #     subj_avg_logits = []
-    #     subj_targets = []
-    #     for subj in subjects:
-    #         subj_logits = [total_out[i][0] for i in range(len(subj_array)) if subj_array[i] == subj]
-    #         if self.hparams.decoder == 'series_decoder': # do not calculate the average logits
-    #             subj_avg_logits.append(subj_logits)
-    #         else:
-    #             subj_avg_logits.append(torch.mean(torch.stack(subj_logits), dim=0))
-    #         subj_targets.append([total_out[i][1] for i in range(len(subj_array)) if subj_array[i] == subj][0])
-    
-    #     if self.hparams.decoder == 'series_decoder':
-    #         subj_avg_logits = [i[0] for i in subj_avg_logits] # unpack single values from the list
-    #         subj_avg_logits = torch.stack(subj_avg_logits)
-    #         subj_targets = torch.stack(subj_targets)
-    #     else:
-    #         subj_avg_logits = torch.stack(subj_avg_logits)
-    #         subj_targets = torch.tensor(subj_targets)
-    
-    #     if self.hparams.downstream_task_type == 'classification':
-            
-    #         if self.hparams.decoder == 'series_decoder':
-    #             subj_avg_logits = rearrange(subj_avg_logits, 'b tta c -> (b tta) c')
-    #             subj_targets = subj_targets.flatten()
-                
-    #         num_classes = subj_avg_logits.shape[1]
-            
-    #         probabilities = F.softmax(subj_avg_logits.to(dtype=torch.float32), dim=1) # (b,num_classes), require 32 bit precision
-    #         predictions = probabilities.argmax(dim=1) # (b)
-            
-    #         predictions_np = predictions.cpu().numpy()
-    #         targets_np = subj_targets.cpu().numpy()
-
-    #         accuracy = accuracy_score(targets_np, predictions_np)
-    #         balanced_accuracy = balanced_accuracy_score(targets_np, predictions_np)
-
-    #         if num_classes == 2:
-    #             roc_auc = roc_auc_score(targets_np, predictions_np)
-    #         else: 
-    #             targets_one_hot = label_binarize(targets_np, classes=np.arange(num_classes))
-    #             roc_auc = roc_auc_score(targets_one_hot, probabilities.cpu().detach().numpy(), multi_class='ovr')
-
-    #         if self.hparams.decoder == 'series_decoder':
-                
-    #             # evaluate multiple targets separately
-    #             t = self.hparams.img_size[3]
-
-    #             subj_avg_logits = rearrange(subj_avg_logits, '(b t ta) c -> b t ta c', t=t, ta=self.hparams.num_targets, c=self.hparams.num_classes)
-    #             subj_targets = rearrange(subj_targets, '(b t ta) -> b t ta', t=t, ta=self.hparams.num_targets)
-            
-    #             for i in range(self.hparams.num_targets):
-    #                 logits_group = subj_avg_logits[:,:,i]  # Shape: [batch_size, temporal_size, num_classes]
-    #                 target_group = subj_targets[..., i]
-                    
-    #                 probabilities = F.softmax(logits_group.to(dtype=torch.float32), dim=-1) # (b, temporal_size, num_classes), require 32 bit precision
-    #                 predictions = probabilities.argmax(dim=-1) # (b, temporal_size)
-                    
-    #                 predictions_np = predictions.flatten().cpu().numpy()
-    #                 targets_np = target_group.flatten().cpu().numpy()
-                    
-    #                 accuracy_group = accuracy_score(targets_np, predictions_np)
-    #                 balanced_accuracy_group = balanced_accuracy_score(targets_np, predictions_np)
-                    
-    #                 if num_classes == 2:
-    #                     roc_auc_group = roc_auc_score(targets_np, predictions_np)
-    #                 else: 
-    #                     targets_one_hot = label_binarize(targets_np, classes=np.arange(num_classes))
-    #                     roc_auc_group = roc_auc_score(targets_one_hot, rearrange(probabilities, 'b t c -> (b t) c').cpu().detach().numpy(), multi_class='ovr')
-                    
-    #                 self.log(f"{mode_str}_acc_{i}", accuracy_group, sync_dist=True)
-    #                 self.log(f"{mode_str}_balacc_{i}", balanced_accuracy_group, sync_dist=True)
-    #                 self.log(f"{mode_str}_AUROC_{i}", roc_auc_group, sync_dist=True)
-                
-    #         self.log(f"{mode_str}_acc", accuracy, sync_dist=True)
-    #         self.log(f"{mode_str}_balacc", balanced_accuracy, sync_dist=True)
-    #         self.log(f"{mode_str}_AUROC", roc_auc, sync_dist=True)
- 
-    #     # regression target is normalized
-    #     elif self.hparams.downstream_task_type == 'regression':
-    #         if self.hparams.decoder == 'series_decoder':
-    #             # flatten both if 3D
-    #             if subj_avg_logits.ndim > 2:
-    #                 subj_avg_logits = subj_avg_logits.reshape(subj_avg_logits.size(0), -1)
-    #             if subj_targets.ndim > 2:
-    #                 subj_targets = subj_targets.reshape(subj_targets.size(0), -1)
-            
-    #         print("🟩 logits shape before mse:", subj_avg_logits.shape)
-    #         print("🟩 targets shape before mse:", subj_targets.shape)
-
-
-    #         # subj_avg_logits = subj_avg_logits.squeeze(-1)
-    #         mse = F.mse_loss(subj_avg_logits, subj_targets)
-    #         mae = F.l1_loss(subj_avg_logits, subj_targets)
-            
-    #         # reconstruct to original scale
-    #         if self.hparams.label_scaling_method == 'standardization': # default
-    #             adjusted_mse = F.mse_loss(subj_avg_logits * self.scaler.scale_[0] + self.scaler.mean_[0], subj_targets * self.scaler.scale_[0] + self.scaler.mean_[0])
-    #             adjusted_mae = F.l1_loss(subj_avg_logits * self.scaler.scale_[0] + self.scaler.mean_[0], subj_targets * self.scaler.scale_[0] + self.scaler.mean_[0])
-    #         elif self.hparams.label_scaling_method == 'minmax':
-    #             adjusted_mse = F.mse_loss(subj_avg_logits * (self.scaler.data_max_[0] - self.scaler.data_min_[0]) + self.scaler.data_min_[0], subj_targets * (self.scaler.data_max_[0] - self.scaler.data_min_[0]) + self.scaler.data_min_[0])
-    #             adjusted_mae = F.l1_loss(subj_avg_logits * (self.scaler.data_max_[0] - self.scaler.data_min_[0]) + self.scaler.data_min_[0], subj_targets * (self.scaler.data_max_[0] - self.scaler.data_min_[0]) + self.scaler.data_min_[0])
-    #         pearson = PearsonCorrCoef()
-    #         r2_score = R2Score()
-            
-    #         if self.hparams.decoder == 'series_decoder':
-    #             pearson_coef = pearson(subj_avg_logits.flatten(), subj_targets.flatten())
-    #             r2 = r2_score(subj_avg_logits.flatten(), subj_targets.flatten()) if len(subj_avg_logits) >=2 else 0
-    #         else:
-    #             pearson_coef = pearson(subj_avg_logits, subj_targets)
-    #             r2 = r2_score(subj_avg_logits, subj_targets) if len(subj_avg_logits) >=2 else 0
-            
-    #         if self.hparams.decoder == 'series_decoder':
-                
-    #             # evaluate multiple targets separately
-    #             t = self.hparams.img_size[3]
-            
-    #             subj_avg_logits = subj_avg_logits.view(-1, t ,self.hparams.num_targets) # (b, t*num_targets) -> (b, t, num_targets)
-    #             subj_targets = subj_targets.view(-1, t ,self.hparams.num_targets) # (b, t*num_targets) -> (b, t, num_targets)
-            
-    #             for i in range(self.hparams.num_targets):
-    #                 logits_group = subj_avg_logits[..., i]  # Shape: [batch_size, temporal_size]
-    #                 target_group = subj_targets[..., i]
-                
-    #                 mse_group = F.mse_loss(logits_group, target_group)  # target is float
-    #                 mae_group = F.l1_loss(logits_group, target_group)
-                
-    #                 pearson_coef_group = pearson(logits_group.flatten(), target_group.flatten())
-    #                 r2_group = r2_score(logits_group.flatten(), target_group.flatten()) 
-
-    #                 if self.hparams.label_scaling_method == 'standardization': # default
-    #                     adjusted_mse_group = F.mse_loss(logits_group * self.scaler.scale_[0] + self.scaler.mean_[0], target_group * self.scaler.scale_[0] + self.scaler.mean_[0])
-    #                     adjusted_mae_group = F.l1_loss(logits_group * self.scaler.scale_[0] + self.scaler.mean_[0], target_group * self.scaler.scale_[0] + self.scaler.mean_[0])
-    #                 elif self.hparams.label_scaling_method == 'minmax':
-    #                     adjusted_mse_group = F.mse_loss(logits_group * (self.scaler.data_max_[0] - self.scaler.data_min_[0]) + self.scaler.data_min_[0], target_group * (self.scaler.data_max_[0] - self.scaler.data_min_[0]) + self.scaler.data_min_[0])
-    #                     adjusted_mae_group = F.l1_loss(logits_group * (self.scaler.data_max_[0] - self.scaler.data_min_[0]) + self.scaler.data_min_[0], target_group * (self.scaler.data_max_[0] - self.scaler.data_min_[0]) + self.scaler.data_min_[0])
-
-    #                 self.log(f"{mode_str}_corrcoef_{i}", pearson_coef_group, sync_dist=True)
-    #                 self.log(f"{mode_str}_r2_score_{i}", r2_group, sync_dist=True)
-    #                 self.log(f"{mode_str}_mse_{i}", mse_group, sync_dist=True)
-    #                 self.log(f"{mode_str}_mae_{i}", mae_group, sync_dist=True)
-    #                 self.log(f"{mode_str}_adjusted_mse_{i}", adjusted_mse_group, sync_dist=True)
-    #                 self.log(f"{mode_str}_adjusted_mae_{i}", adjusted_mae_group, sync_dist=True)
-            
-    #         self.log(f"{mode_str}_corrcoef", pearson_coef, sync_dist=True)
-    #         self.log(f"{mode_str}_r2_score", r2, sync_dist=True)
-    #         self.log(f"{mode_str}_mse", mse, sync_dist=True)
-    #         self.log(f"{mode_str}_mae", mae, sync_dist=True)
-    #         self.log(f"{mode_str}_adjusted_mse", adjusted_mse, sync_dist=True) 
-    #         self.log(f"{mode_str}_adjusted_mae", adjusted_mae, sync_dist=True)
 
 
     def training_step(self, batch, batch_idx):
@@ -468,7 +525,7 @@ class LitClassifier(pl.LightningModule):
             output = [(logit.cpu().detach(), targets.cpu()) for logit, targets in zip(logits, target)] # target is not single value, item() cannot be invoked
         else:
             output = [(logit.cpu().detach(), targets.cpu().item()) for logit, targets in zip(logits, target)]
-        return (subj, output)
+        return (subj, output) # output은 배치 개수로 구성된 list. output[0]의 경우, [torch.Size([210, 2]), torch.Size([210])]
 
     def validation_epoch_end(self, outputs):
         """
@@ -712,10 +769,16 @@ class LitClassifier(pl.LightningModule):
         # others
         group.add_argument("--scalability_check", action='store_true', help="whether to check scalability")
         group.add_argument("--process_code", default=None, help="Slurm code/PBS code. Use this argument if you want to save process codes to your log")
-        
+        group.add_argument("--pos_weight", action='store_true', help="positive class weight for imbalanced datasets") # kimbo change
+
         # decoder related
         group.add_argument("--num_classes", type=int, default=2, help="Number of distinct target classes")
         group.add_argument("--decoder", type=str, default="single_target_decoder", help="Which decoder to use: (i) single_target_decoder - predict a single value via regression or classification | (ii) series_decoder: predict a series of values (one per timeframe) via regression")
         group.add_argument("--num_targets", type=int, default=7, help="Number of targets to predict in series_decoder")
         # parser.add_argument("--valid_only", action='store_true', help="disable running _evaluate_metrics(mode='test') at validation stage") # kimbo change
+
+        # classification metric related
+
+
+
         return parser

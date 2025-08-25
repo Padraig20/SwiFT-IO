@@ -125,28 +125,32 @@ class fMRIDataModule(pl.LightningDataModule):
                         final_dict[subject]=[sex,target]
 
             elif self.hparams.decoder == 'series_decoder':
+
                 if self.hparams.downstream_task == 'emotions': task_name = emotions
                 elif self.hparams.downstream_task == 'contents': task_name = contents
                 elif self.hparams.downstream_task == 'features': task_name = features
                 else: raise ValueError('downstream task not supported')
+
                 
                 if self.hparams.downstream_task_type == 'regression' and self.hparams.adjust_hrf == True: # kimbo change
                     task_name = [x + "_conv" for x in task_name]  # kimbo change
                 elif self.hparams.downstream_task_type == 'regression' and self.hparams.adjust_hrf == False:  # kimbo change
                     task_name = [x for x in task_name]  # kimbo change
-                elif self.hparams.downstream_task_type == 'classification':  # kimbo change
-                    task_name = [x + "_conv_mean_binary" for x in task_name]  # kimbo change
+                elif self.hparams.downstream_task_type == 'classification' and self.hparams.adjust_hrf == True:  # kimbo change
+                    task_name = [x + "_conv_binary" for x in task_name]  # kimbo change
+                elif self.hparams.downstream_task_type == 'classification' and self.hparams.adjust_hrf == False:  # kimbo change
+                    task_name = [x + "_binary" for x in task_name]  # kimbo change
                 else:
                     raise ValueError('downstream task type not supported')
                 
                 if self.hparams.input_type == 'movieDM':
-                    meta_data = pd.read_csv("/pscratch/sd/k/kimbo/SwiFT-IO/metadata/DespicableMe_summary_codes_1.2Hz_intuitivenames_260120.csv") # TODO change later
+                    meta_data = pd.read_csv("/pscratch/sd/k/kimbo/SwiFT-IO-2/SwiFT-IO/metadata/DespicableMe_summary_codes_1.2Hz_intuitivenames_270819.csv") # TODO change later
                     
                 elif self.hparams.input_type == 'movieTP':
                     meta_data = pd.read_csv("/pscratch/sd/k/kimbo/SwiFT-IO/metadata/ThePresent_summary_codes_1.2Hz_intuitivenames_260120.csv")
+                
                 meta_task = meta_data[task_name + ['frame']].dropna() 
                 
-
                 for subject in os.listdir(img_root):
                         sex = 1 # arbitrary value, not used
                         target = meta_task[task_name].values
