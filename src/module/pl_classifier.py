@@ -9,6 +9,7 @@ import pickle
 from torchmetrics import PearsonCorrCoef # Accuracy,
 from torchmetrics.regression import R2Score
 from sklearn.metrics import balanced_accuracy_score, accuracy_score, roc_auc_score
+from sklearn.metrics import confusion_matrix, precision_recall_fscore_support, matthews_corrcoef, average_precision_score, precision_recall_curve # kimbo change
 from sklearn.preprocessing import label_binarize
 import monai.transforms as monai_t
 
@@ -73,21 +74,29 @@ class LitClassifier(pl.LightningModule):
             # ✅ 한꺼번에 삭제 (딕셔너리 변경 중 반복 방지)
             for k in remove_keys:
                 del hparams[k]
+        
+        if not hasattr(self.hparams, "use_youden_threshold"):
+            self.hparams.use_youden_threshold = True
+        if not hasattr(self.hparams, "threshold_scope"):
+            self.hparams.threshold_scope = "per_target"   # or "global"
+        if not hasattr(self.hparams, "positive_class_index"):
+            self.hparams.positive_class_index = 1
+
+
+        # Safe defaults:
+        if not hasattr(self.hparams, "use_youden_threshold"):
+            self.hparams.use_youden_threshold = True
+        if not hasattr(self.hparams, "threshold_scope"):
+            self.hparams.threshold_scope = "per_target"   # or "global"
+        if not hasattr(self.hparams, "positive_class_index"):
+            self.hparams.positive_class_index = 1
+
+        # Storage for learned thresholds (set during validation, used in test)
+        if not hasattr(self, "eval_thresholds"):
+            self.eval_thresholds = {"global": 0.5, "per_target": {}}
 
         # ✅ 6. 안전한 값만 `save_hyperparameters()`에 전달
         self.save_hyperparameters(hparams)
-
-        # # you should define target_values at the Dataset classes
-        # target_values = data_module.train_dataset.target_values
-        # if self.hparams.label_scaling_method == 'standardization':
-        #     scaler = StandardScaler()
-        #     normalized_target_values = scaler.fit_transform(target_values)
-        #     print(f'target_mean:{scaler.mean_[0]}, target_std:{scaler.scale_[0]}')
-        # elif self.hparams.label_scaling_method == 'minmax': 
-        #     scaler = MinMaxScaler()
-        #     normalized_target_values = scaler.fit_transform(target_values)
-        #     print(f'target_max:{scaler.data_max_[0]},target_min:{scaler.data_min_[0]}')
-        # self.scaler = scaler
 
         # you should define target_values at the Dataset classes
         if data_module and hasattr(data_module, "train_dataset"):
@@ -258,35 +267,39 @@ class LitClassifier(pl.LightningModule):
         return: best_threshold(float), best_J(float), tpr_at_best(float), fpr_at_best(float)
         """
         with torch.no_grad():
-            # 정렬(내림차순): 점수가 높을수록 양성
-            scores, idx = torch.sort(pos_scores.detach().flatten().cpu(), descending=True)
+            # 내림차순 정렬(점수 높을수록 양성)
+            scores = pos_scores.detach().flatten().cpu().to(torch.float64)
             y = y_true.detach().flatten().cpu().to(torch.int64)
+            scores, idx = torch.sort(scores, descending=True)
             y = y[idx]
 
             P = int((y == 1).sum().item())
             N = int((y == 0).sum().item())
             if P == 0 or N == 0:
-                # 한 클래스만 있으면 의미있는 ROC 불가 → 기본값
+                # 한 클래스만 있으면 ROC/Youden 정의 불가 → 기본값 반환
                 return 0.5, 0.0, 0.0, 0.0
 
-            # 누적 양성/음성: threshold를 scores[k]로 잡으면, 상위 k개를 양성으로 분류
-            tp_cum = torch.cumsum((y == 1).to(torch.int64), dim=0)            # 길이 N
+            # 누적 TP/FP
+            tp_cum = torch.cumsum((y == 1).to(torch.int64), dim=0)  # 길이 N
             fp_cum = torch.cumsum((y == 0).to(torch.int64), dim=0)
 
-            # 각 지점에서의 TPR/FPR
+            # TPR/FPR
             tpr = tp_cum.to(torch.float64) / P
             fpr = fp_cum.to(torch.float64) / N
-            J = tpr - fpr
 
-            # 같은 점수에서는 한 번만 평가(불필요한 중복 제거)
-            # unique scores의 첫 인덱스만 사용
-            uniq_scores, uniq_idx = torch.unique_consecutive(scores, return_counts=False, return_inverse=False, dim=0, return_indices=True)
-            tpr_u = tpr[uniq_idx]
-            fpr_u = fpr[uniq_idx]
+            # 점수가 같은 연속 구간 중 '첫 발생 지점'만 사용 (unique_consecutive 대체)
+            # mask[k] == True 이면 scores[k] 가 새로운 값의 첫 위치
+            mask = torch.ones_like(scores, dtype=torch.bool)
+            if scores.numel() > 1:
+                mask[1:] = scores[1:] != scores[:-1]
+
+            scores_u = scores[mask]
+            tpr_u = tpr[mask]
+            fpr_u = fpr[mask]
+
             J_u = tpr_u - fpr_u
-
             best_i = int(torch.argmax(J_u).item())
-            best_thr = float(uniq_scores[best_i].item())
+            best_thr = float(scores_u[best_i].item())
             return best_thr, float(J_u[best_i].item()), float(tpr_u[best_i].item()), float(fpr_u[best_i].item())
 
     def _evaluate_metrics(self, subj_array, total_out, mode):
@@ -355,16 +368,82 @@ class LitClassifier(pl.LightningModule):
                 preds_all = probs_all.argmax(dim=-1)                                     # [(Σ T_s*ta)]
                 y_np = targets_all.cpu().numpy()
                 p_np = preds_all.cpu().numpy()
-                from sklearn.metrics import accuracy_score, balanced_accuracy_score
                 acc = accuracy_score(y_np, p_np)
                 bal = balanced_accuracy_score(y_np, p_np)
 
             self.log(f"{mode}_acc", acc, sync_dist=True)
             self.log(f"{mode}_balacc", bal, sync_dist=True)
 
+            # === [추가] 불균형 대응: Youden threshold + 혼동행렬 기반 지표 (전역) ===
+            with torch.no_grad():
+                pos_idx = int(self.hparams.positive_class_index)
+                pos_scores_all_t = probs_all[:, pos_idx]  # torch tensor, shape [(Σ T_s*ta)]
+                y_all_t = targets_all
+
+                # 검증 단계에서 임계값 학습(저장), 테스트/추론 단계에서 사용
+                use_thr = 0.5
+                if getattr(self.hparams, "use_youden_threshold", False):
+                    if mode in ["val", "valid", "validation"] and getattr(self.hparams, "threshold_scope", "per_target") == "global":
+                        best_thr, best_J, tpr_b, fpr_b = self._best_threshold_youden(pos_scores_all_t, y_all_t)
+                        # 저장(전역)
+                        self.eval_thresholds["global"] = float(best_thr)
+                        self.log(f"{mode}_thr_global_candidate", float(best_thr), sync_dist=True)
+
+                    # 이번 패스에서 사용할 threshold 선택
+                    if getattr(self.hparams, "threshold_scope", "per_target") == "global":
+                        use_thr = float(self.eval_thresholds.get("global", 0.5))
+
+                # cutoff 적용 예측
+                preds_thr_all_np = (pos_scores_all_t.detach().cpu().numpy() >= use_thr).astype(int)
+                y_np_all = y_all_t.detach().cpu().numpy()
+
+                # 혼동행렬 및 파생지표
+                cm = confusion_matrix(y_np_all, preds_thr_all_np, labels=[0, 1])
+                if cm.shape == (2, 2):
+                    tn, fp, fn, tp = cm.ravel()
+                else:
+                    tn = cm[0, 0] if cm.shape[0] > 0 and cm.shape[1] > 0 else 0
+                    fp = cm[0, 1] if cm.shape[0] > 0 and cm.shape[1] > 1 else 0
+                    fn = cm[1, 0] if cm.shape[0] > 1 and cm.shape[1] > 0 else 0
+                    tp = cm[1, 1] if cm.shape[0] > 1 and cm.shape[1] > 1 else 0
+
+                def _safe_div(a, b): 
+                    return float(a) / float(b) if (b is not None and b != 0) else 0.0
+
+                recall_pos   = _safe_div(tp, tp + fn)   # TPR, 민감도
+                specificity  = _safe_div(tn, tn + fp)   # TNR, 특이도
+                precision_pos= _safe_div(tp, tp + fp)   # PPV
+                npv          = _safe_div(tn, tn + fn)   # NPV
+                # F1(양성 클래스)
+                f1s = precision_recall_fscore_support(y_np_all, preds_thr_all_np, average=None, labels=[0, 1])[2]
+                f1_pos = float(f1s[1]) if f1s.size >= 2 else 0.0
+                # MCC
+                mcc = matthews_corrcoef(y_np_all, preds_thr_all_np) if (tp + fp + tn + fn) > 0 else 0.0
+                prevalence    = _safe_div(tp + fn, tp + fn + tn + fp)   # 실제 양성 비율
+                pred_pos_rate = _safe_div(tp + fp, tp + fp + tn + fn)   # 예측 양성 비율
+                # AUPRC(양성 기준) — 불균형에서 중요
+                auprc_global = average_precision_score(y_np_all, pos_scores_all_t.detach().cpu().numpy()) if np.unique(y_np_all).size == 2 else float("nan")
+
+            # 로깅
+            self.log(f"{mode}_thr_global_used", use_thr, sync_dist=True)
+            self.log(f"{mode}_TP", tp, sync_dist=True)
+            self.log(f"{mode}_FP", fp, sync_dist=True)
+            self.log(f"{mode}_TN", tn, sync_dist=True)
+            self.log(f"{mode}_FN", fn, sync_dist=True)
+            self.log(f"{mode}_recall_pos", recall_pos, sync_dist=True)
+            self.log(f"{mode}_specificity", specificity, sync_dist=True)
+            self.log(f"{mode}_precision_pos", precision_pos, sync_dist=True)
+            self.log(f"{mode}_npv", npv, sync_dist=True)
+            self.log(f"{mode}_f1_pos", f1_pos, sync_dist=True)
+            self.log(f"{mode}_mcc", mcc, sync_dist=True)
+            self.log(f"{mode}_prevalence", prevalence, sync_dist=True)
+            self.log(f"{mode}_pred_pos_rate", pred_pos_rate, sync_dist=True)
+            self.log(f"{mode}_AUPRC_global", auprc_global, sync_dist=True)
+            # === [추가 끝] ===
+
+
             # (선택) multi-target per-i 지표
             if (self.hparams.decoder in ['series_decoder','multi_target_decoder']) and self.hparams.num_targets > 1:
-                from sklearn.metrics import accuracy_score, balanced_accuracy_score, roc_auc_score, average_precision_score
                 for i in range(ta):
                     lg_list = [L[:, i, :].reshape(-1, C) for L in subj_logits_list_by_subj]  # 각 [T_total_s, C]
                     tg_list = [Y[:, i].reshape(-1)      for Y in subj_targets_list_by_subj]  # 각 [T_total_s]
@@ -391,6 +470,65 @@ class LitClassifier(pl.LightningModule):
                     self.log(f"{mode}_balacc_{i}", bal_i, sync_dist=True)
                     self.log(f"{mode}_AUROC_{i}", auroc_i, sync_dist=True)
                     self.log(f"{mode}_AUPRC_{i}", auprc_i, sync_dist=True)
+
+                    # === [추가] 타깃별 임계값 + 혼동행렬 지표 ===
+                    if C == 2 and np.unique(y_i).size == 2:
+                        pos_idx = int(self.hparams.positive_class_index)
+                        pos_scores_i_t = probs[:, pos_idx]  # torch tensor
+                        use_thr_i = 0.5
+
+                        if getattr(self.hparams, "use_youden_threshold", False):
+                            # 검증에서 per_target 스코프일 때만 각 타깃별 임계값을 학습
+                            if mode in ["val", "valid", "validation"] and getattr(self.hparams, "threshold_scope", "per_target") == "per_target":
+                                best_thr_i, best_J_i, _, _ = self._best_threshold_youden(pos_scores_i_t, tg)
+                                self.eval_thresholds["per_target"][i] = float(best_thr_i)
+                                self.log(f"{mode}_thr_{i}_candidate", float(best_thr_i), sync_dist=True)
+
+                            # 사용할 임계값 선택
+                            if getattr(self.hparams, "threshold_scope", "per_target") == "per_target":
+                                use_thr_i = float(self.eval_thresholds["per_target"].get(i, 0.5))
+                            else:
+                                use_thr_i = float(self.eval_thresholds.get("global", 0.5))
+
+                        preds_thr_i_np = (pos_scores_i_t.detach().cpu().numpy() >= use_thr_i).astype(int)
+                        cm_i = confusion_matrix(y_i, preds_thr_i_np, labels=[0, 1])
+                        if cm_i.shape == (2, 2):
+                            tn_i, fp_i, fn_i, tp_i = cm_i.ravel()
+                        else:
+                            tn_i = cm_i[0, 0] if cm_i.shape[0] > 0 and cm_i.shape[1] > 0 else 0
+                            fp_i = cm_i[0, 1] if cm_i.shape[0] > 0 and cm_i.shape[1] > 1 else 0
+                            fn_i = cm_i[1, 0] if cm_i.shape[0] > 1 and cm_i.shape[1] > 0 else 0
+                            tp_i = cm_i[1, 1] if cm_i.shape[0] > 1 and cm_i.shape[1] > 1 else 0
+
+                        def _safe_div(a, b): 
+                            return float(a) / float(b) if (b is not None and b != 0) else 0.0
+
+                        recall_pos_i    = _safe_div(tp_i, tp_i + fn_i)
+                        specificity_i   = _safe_div(tn_i, tn_i + fp_i)
+                        precision_pos_i = _safe_div(tp_i, tp_i + fp_i)
+                        npv_i           = _safe_div(tn_i, tn_i + fn_i)
+                        f1s_i = precision_recall_fscore_support(y_i, preds_thr_i_np, average=None, labels=[0, 1])[2]
+                        f1_pos_i = float(f1s_i[1]) if f1s_i.size >= 2 else 0.0
+                        mcc_i = matthews_corrcoef(y_i, preds_thr_i_np) if (tp_i + fp_i + tn_i + fn_i) > 0 else 0.0
+
+                        # AUPRC 한 번 더(임계값 로깅과 구분)
+                        auprc_thr_i = average_precision_score(y_i, pos_scores_i_t.detach().cpu().numpy())
+
+                        # 로깅
+                        self.log(f"{mode}_thr_{i}_used", use_thr_i, sync_dist=True)
+                        self.log(f"{mode}_TP_{i}", tp_i, sync_dist=True)
+                        self.log(f"{mode}_FP_{i}", fp_i, sync_dist=True)
+                        self.log(f"{mode}_TN_{i}", tn_i, sync_dist=True)
+                        self.log(f"{mode}_FN_{i}", fn_i, sync_dist=True)
+                        self.log(f"{mode}_recall_pos_{i}", recall_pos_i, sync_dist=True)
+                        self.log(f"{mode}_specificity_{i}", specificity_i, sync_dist=True)
+                        self.log(f"{mode}_precision_pos_{i}", precision_pos_i, sync_dist=True)
+                        self.log(f"{mode}_npv_{i}", npv_i, sync_dist=True)
+                        self.log(f"{mode}_f1_pos_{i}", f1_pos_i, sync_dist=True)
+                        self.log(f"{mode}_mcc_{i}", mcc_i, sync_dist=True)
+                        self.log(f"{mode}_AUPRC_thr_{i}", auprc_thr_i, sync_dist=True)
+                    # === [추가 끝] === 
+        
         elif self.hparams.downstream_task_type == 'regression':
             # --- 공통 하이퍼/헬퍼 호출 (가변 길이 지원) ---
             t  = self.hparams.img_size[3]                # window length (e.g., 30)
@@ -778,7 +916,9 @@ class LitClassifier(pl.LightningModule):
         # parser.add_argument("--valid_only", action='store_true', help="disable running _evaluate_metrics(mode='test') at validation stage") # kimbo change
 
         # classification metric related
-
+        group.add_argument("--use_youden_threshold", action='store_true', help="whether to use Youden's J statistic to determine the optimal threshold for binary classification") # kimbo change
+        group.add_argument("--threshold_scope", type=str, default="per_target",  choices=['per_target', 'global'], help="Scope of thresholding: 'per_target' applies thresholds individually for each target; 'global' applies a single threshold across all targets.")
+        group.add_argument("--positive_class_index", type=int, default=1, help="Index of the positive class for binary classification tasks.")
 
 
         return parser
