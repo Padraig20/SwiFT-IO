@@ -95,6 +95,10 @@ class LitClassifier(pl.LightningModule):
             print("⚠️ No train_dataset provided — skipping target normalization")
             self.scaler = None  # fallback: not used
 
+        ####### for loss ######
+        if not hasattr(self.hparams, "use_pos_weight"):
+            self.hparams.use_pos_weight = False
+
         ####### related classifcation evalution ######
         # Safe defaults:
         if not hasattr(self.hparams, "use_youden_threshold"):
@@ -215,57 +219,86 @@ class LitClassifier(pl.LightningModule):
                 target = (unnormalized_target - self.scaler.data_min_[0]) / (self.scaler.data_max_[0] - self.scaler.data_min_[0])
 
         return subj, logits, target
-    
+        
     def _calculate_loss(self, batch, mode):
         """
         Calculates the loss and performance metrics for classification or regression tasks. 
         Logs the results for monitoring during training or evaluation.
         """
-        subj, logits, target = self._compute_logits(batch, augment_during_training = self.hparams.augment_during_training)
+        # NOTE: mode를 _compute_logits에 넘겨야 augment가 train에서만 동작합니다.
+        subj, logits, target = self._compute_logits(
+            batch,
+            augment_during_training=self.hparams.augment_during_training,
+            mode=mode
+        )
 
         if self.hparams.downstream_task_type == 'classification':
-            if self.hparams.decoder == 'series_decoder': # [b, (t ta), c] -> [(b t ta), c]
-                logits = rearrange(logits, 'b tta c -> (b tta) c') # torch.Size([420, 2])
-                target = target.flatten() # (b,tta) -> (b*tta) # torch.Size([420])
+            if self.hparams.decoder == 'series_decoder':  # [b, (t ta), c] -> [(b t ta), c]
+                logits = rearrange(logits, 'b tta c -> (b tta) c')
+                target = target.flatten()  # (b, tta) -> (b*tta)
+
             # ---- Unified binary/multiclass handling ----
             num_classes = logits.size(-1)
-            if num_classes == 2 and self.hparams.num_classes == 2: 
-                # Binary classification with BCEWithLogitsLoss
-                # Convert 2-logits to a single logit (log-odds): logit_pos - logit_neg
-                binary_logit = logits[:, 1] - logits[:, 0]  # shape: [N]
-                target_f = target.float()
+            if num_classes == 2 and self.hparams.num_classes == 2:
+                # =========================
+                # Binary classification (BCEWithLogitsLoss) with optional pos_weight
+                # =========================
+                # Convert 2-logits to single logit (log-odds): logit_pos - logit_neg
+                binary_logit = logits[:, 1] - logits[:, 0]  # [N]
+                # Targets as float in {0,1}
+                target_f = target.float().clamp(0, 1)
 
-                # Optional positive class weight for imbalance
-                pos_weight = getattr(self.hparams.pos_weight, "pos_weight", None)
-                if pos_weight is not None and not torch.is_tensor(pos_weight):
-                    pos_weight = torch.tensor(pos_weight, device=logits.device, dtype=logits.dtype)
+                # ---- pos_weight: 배치 기반 자동 계산 (use_pos_weight=True일 때만) ----
+                pos_weight_tensor = None
+                if bool(getattr(self.hparams, "use_pos_weight", False)):
+                    with torch.no_grad():
+                        pos = target_f.sum().item()
+                        neg = target_f.numel() - pos
+                        # 분모 0 방지. 양성이 전혀 없는 배치면 pos_weight=1.0로 둡니다(폭주 방지).
+                        pw = (neg / max(pos, 1e-6)) if pos > 0 else 1.0
+                    pos_weight_tensor = torch.tensor(pw, device=logits.device, dtype=logits.dtype)
 
-                if pos_weight is not None:
-                    loss = F.binary_cross_entropy_with_logits(binary_logit, target_f, pos_weight=pos_weight)
+                # ---- BCEWithLogitsLoss ----
+                if pos_weight_tensor is not None:
+                    loss = F.binary_cross_entropy_with_logits(binary_logit, target_f, pos_weight=pos_weight_tensor)
                 else:
                     loss = F.binary_cross_entropy_with_logits(binary_logit, target_f)
 
-                # Accuracy: sigmoid(logit)>0.5 <=> logit>0
-                pred = (binary_logit > 0).long()
+                # ---- Accuracy (decision boundary at 0 for logits) ----
+                pred = (binary_logit > 0).long()  # sigmoid(logit)>0.5 <=> logit>0
                 acc = (pred == target.long()).float().mean()
-            else: 
+
+            else:
                 # CrossEntropy for binary (C=2) or multiclass (C>=3)
-                loss = F.cross_entropy(logits, target.long()) # target is float
+                loss = F.cross_entropy(logits, target.long())  # target is float; CE expects long labels
                 acc = self.metric.get_accuracy(logits, target.float().squeeze())
+
             result_dict = {
                 f"{mode}_loss": loss,
                 f"{mode}_acc": acc,
             }
+
         elif self.hparams.downstream_task_type == 'regression':
             loss = F.mse_loss(logits.squeeze(), target.squeeze())
             l1 = F.l1_loss(logits.squeeze(), target.squeeze())
             result_dict = {
                 f"{mode}_loss": loss,
                 f"{mode}_mse": loss,
-                f"{mode}_l1_loss": l1
+                f"{mode}_l1_loss": l1,
             }
-        self.log_dict(result_dict, prog_bar=True, sync_dist=False, add_dataloader_idx=False, on_step=True, on_epoch=True, batch_size=self.hparams.batch_size)
+
+        # log
+        self.log_dict(
+            result_dict,
+            prog_bar=True,
+            sync_dist=False,
+            add_dataloader_idx=False,
+            on_step=True,
+            on_epoch=True,
+            batch_size=self.hparams.batch_size
+        )
         return loss
+
 
     def _best_threshold_youden(self, pos_scores: torch.Tensor, y_true: torch.Tensor):
         """
@@ -1050,8 +1083,6 @@ class LitClassifier(pl.LightningModule):
         # others
         group.add_argument("--scalability_check", action='store_true', help="whether to check scalability")
         group.add_argument("--process_code", default=None, help="Slurm code/PBS code. Use this argument if you want to save process codes to your log")
-        group.add_argument("--pos_weight_value", type=float, default=None,
-                   help="Positive class weight (e.g., N_neg/N_pos)") # kimbo changes
 
         # decoder related
         group.add_argument("--num_classes", type=int, default=2, help="Number of distinct target classes")
@@ -1072,7 +1103,10 @@ class LitClassifier(pl.LightningModule):
         group.add_argument("--fbeta_scope", type=str, default="per_target",
                         choices=['per_target', 'global'],
                         help="Scope for F-beta thresholding: per_target or global.")
-
+        
+        # positive weight loss
+        group.add_argument("--use_pos_weight", action="store_true",
+                        help="Use BCEWithLogits pos_weight for class imbalance (binary).")
 
 
         return parser
