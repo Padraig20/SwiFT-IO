@@ -74,26 +74,6 @@ class LitClassifier(pl.LightningModule):
             # ✅ 한꺼번에 삭제 (딕셔너리 변경 중 반복 방지)
             for k in remove_keys:
                 del hparams[k]
-        
-        if not hasattr(self.hparams, "use_youden_threshold"):
-            self.hparams.use_youden_threshold = True
-        if not hasattr(self.hparams, "threshold_scope"):
-            self.hparams.threshold_scope = "per_target"   # or "global"
-        if not hasattr(self.hparams, "positive_class_index"):
-            self.hparams.positive_class_index = 1
-
-
-        # Safe defaults:
-        if not hasattr(self.hparams, "use_youden_threshold"):
-            self.hparams.use_youden_threshold = True
-        if not hasattr(self.hparams, "threshold_scope"):
-            self.hparams.threshold_scope = "per_target"   # or "global"
-        if not hasattr(self.hparams, "positive_class_index"):
-            self.hparams.positive_class_index = 1
-
-        # Storage for learned thresholds (set during validation, used in test)
-        if not hasattr(self, "eval_thresholds"):
-            self.eval_thresholds = {"global": 0.5, "per_target": {}}
 
         # ✅ 6. 안전한 값만 `save_hyperparameters()`에 전달
         self.save_hyperparameters(hparams)
@@ -114,6 +94,33 @@ class LitClassifier(pl.LightningModule):
         else:
             print("⚠️ No train_dataset provided — skipping target normalization")
             self.scaler = None  # fallback: not used
+
+        ####### related classifcation evalution ######
+        # Safe defaults:
+        if not hasattr(self.hparams, "use_youden_threshold"):
+            self.hparams.use_youden_threshold = True
+        if not hasattr(self.hparams, "threshold_scope"):
+            self.hparams.threshold_scope = "per_target"   # or "global"
+        if not hasattr(self.hparams, "positive_class_index"):
+            self.hparams.positive_class_index = 1
+
+        # Storage for learned thresholds (set during validation, used in test)
+        if not hasattr(self, "eval_thresholds"):
+            self.eval_thresholds = {"global": 0.5, "per_target": {}}
+
+        # F-beta cutoff 설정(보조 지표용)
+        if not hasattr(self.hparams, "use_fbeta_threshold"):
+            self.hparams.use_fbeta_threshold = True   # 보조 비교 목적: 기본 True 추천
+        if not hasattr(self.hparams, "fbeta_beta"):
+            self.hparams.fbeta_beta = 2.0             # FN 억제를 강조하려면 β>1 (예: 2.0)
+        if not hasattr(self.hparams, "fbeta_scope"):
+            self.hparams.fbeta_scope = "per_target"   # "global"도 가능
+
+        # F-beta 임계값 저장소 (val에서 학습 → test에서 사용)
+        if not hasattr(self, "eval_thresholds_fbeta"):
+            self.eval_thresholds_fbeta = {"global": 0.5, "per_target": {}}
+
+
 
 
         print(self.hparams.model)
@@ -302,6 +309,40 @@ class LitClassifier(pl.LightningModule):
             best_thr = float(scores_u[best_i].item())
             return best_thr, float(J_u[best_i].item()), float(tpr_u[best_i].item()), float(fpr_u[best_i].item())
 
+    def _best_threshold_fbeta(self, pos_scores: torch.Tensor, y_true: torch.Tensor, beta: float = 2.0):
+        """
+        pos_scores: (N,) 양성 확률 [0,1] (torch tensor)
+        y_true:     (N,) {0,1} (torch tensor)
+        return: (best_thr, best_Fbeta, precision_at_best, recall_at_best)
+        메모:
+        - precision_recall_curve는 thresholds 길이가 (n_points-1) 입니다.
+        - edge case(모두 같은 점수 등)에서는 기본 0.5 반환.
+        """
+        with torch.no_grad():
+            y = y_true.detach().flatten().cpu().to(torch.int64).numpy()
+            s = pos_scores.detach().flatten().cpu().to(torch.float64).numpy()
+
+            # 양성/음성 단일 클래스면 F-beta 의미 없음
+            if np.unique(y).size < 2:
+                return 0.5, 0.0, 0.0, 0.0
+
+            p, r, thr = precision_recall_curve(y, s)  # p,r 길이 = len(thr)+1
+            if thr.size == 0:
+                return 0.5, 0.0, 0.0, 0.0
+
+            # PR커브의 각 threshold 지점에 대해 F_beta 계산 (p[1:], r[1:])이 thr과 정렬상 대응
+            beta2 = float(beta) * float(beta)
+            num = (1 + beta2) * (p[1:] * r[1:])
+            den = (beta2 * p[1:] + r[1:])
+            with np.errstate(divide='ignore', invalid='ignore'):
+                f = np.where(den > 0, num / den, 0.0)
+
+            k = int(np.nanargmax(f))
+            best_thr = float(thr[k])
+            return best_thr, float(f[k]), float(p[k+1]), float(r[k+1])
+
+
+
     def _evaluate_metrics(self, subj_array, total_out, mode):
         """
         Evaluates classification or regression metrics for aggregated subject-level predictions.
@@ -439,8 +480,62 @@ class LitClassifier(pl.LightningModule):
             self.log(f"{mode}_prevalence", prevalence, sync_dist=True)
             self.log(f"{mode}_pred_pos_rate", pred_pos_rate, sync_dist=True)
             self.log(f"{mode}_AUPRC_global", auprc_global, sync_dist=True)
-            # === [추가 끝] ===
 
+            # === [추가] F-beta cutoff (전역) — 보조 지표 로깅용 ===
+            with torch.no_grad():
+                pos_idx = int(self.hparams.positive_class_index)
+                pos_scores_all_t = probs_all[:, pos_idx]
+                y_all_t = targets_all
+
+                use_thr_fbeta = 0.5
+                if getattr(self.hparams, "use_fbeta_threshold", False):
+                    beta = float(getattr(self.hparams, "fbeta_beta", 2.0))
+                    # 검증 단계에서 전역 스코프면 threshold 학습/저장
+                    if mode in ["val", "valid", "validation"] and getattr(self.hparams, "fbeta_scope", "per_target") == "global":
+                        best_thr_fb, best_Fb, p_b, r_b = self._best_threshold_fbeta(pos_scores_all_t, y_all_t, beta=beta)
+                        self.eval_thresholds_fbeta["global"] = float(best_thr_fb)
+                        self.log(f"{mode}_thr_global_fbeta_candidate", float(best_thr_fb), sync_dist=True)
+                        self.log(f"{mode}_Fbeta_global_candidate", float(best_Fb), sync_dist=True)
+
+                    # 사용할 임계값
+                    if getattr(self.hparams, "fbeta_scope", "per_target") == "global":
+                        use_thr_fbeta = float(self.eval_thresholds_fbeta.get("global", 0.5))
+
+                # cutoff 적용
+                preds_fbeta_all_np = (pos_scores_all_t.detach().cpu().numpy() >= use_thr_fbeta).astype(int)
+                y_np_all = y_all_t.detach().cpu().numpy()
+
+                # 혼동행렬 및 파생 지표
+                cm_fb = confusion_matrix(y_np_all, preds_fbeta_all_np, labels=[0, 1])
+                if cm_fb.shape == (2, 2):
+                    tn_fb, fp_fb, fn_fb, tp_fb = cm_fb.ravel()
+                else:
+                    tn_fb = cm_fb[0, 0] if cm_fb.shape[0] > 0 and cm_fb.shape[1] > 0 else 0
+                    fp_fb = cm_fb[0, 1] if cm_fb.shape[0] > 0 and cm_fb.shape[1] > 1 else 0
+                    fn_fb = cm_fb[1, 0] if cm_fb.shape[0] > 1 and cm_fb.shape[1] > 0 else 0
+                    tp_fb = cm_fb[1, 1] if cm_fb.shape[0] > 1 and cm_fb.shape[1] > 1 else 0
+
+                def _safe_div(a, b): 
+                    return float(a) / float(b) if (b is not None and b != 0) else 0.0
+
+                recall_pos_fb    = _safe_div(tp_fb, tp_fb + fn_fb)
+                precision_pos_fb = _safe_div(tp_fb, tp_fb + fp_fb)
+                # F-beta 실제값 (threshold 적용 후)
+                beta = float(getattr(self.hparams, "fbeta_beta", 2.0))
+                beta2 = beta * beta
+                denom = (beta2 * precision_pos_fb + recall_pos_fb)
+                Fbeta_global_used = ((1 + beta2) * precision_pos_fb * recall_pos_fb / denom) if denom > 0 else 0.0
+
+            # 로깅(접두어에 _fbeta_)
+            self.log(f"{mode}_thr_global_fbeta_used", use_thr_fbeta, sync_dist=True)
+            self.log(f"{mode}_recall_pos_fbeta", recall_pos_fb, sync_dist=True)
+            self.log(f"{mode}_precision_pos_fbeta", precision_pos_fb, sync_dist=True)
+            self.log(f"{mode}_Fbeta_global_used", Fbeta_global_used, sync_dist=True)
+            self.log(f"{mode}_TP_fbeta", tp_fb, sync_dist=True)
+            self.log(f"{mode}_FP_fbeta", fp_fb, sync_dist=True)
+            self.log(f"{mode}_TN_fbeta", tn_fb, sync_dist=True)
+            self.log(f"{mode}_FN_fbeta", fn_fb, sync_dist=True)
+            # === [추가 끝] ===
 
             # (선택) multi-target per-i 지표
             if (self.hparams.decoder in ['series_decoder','multi_target_decoder']) and self.hparams.num_targets > 1:
@@ -527,8 +622,56 @@ class LitClassifier(pl.LightningModule):
                         self.log(f"{mode}_f1_pos_{i}", f1_pos_i, sync_dist=True)
                         self.log(f"{mode}_mcc_{i}", mcc_i, sync_dist=True)
                         self.log(f"{mode}_AUPRC_thr_{i}", auprc_thr_i, sync_dist=True)
-                    # === [추가 끝] === 
-        
+                    # === [추가] F-beta cutoff (per-target) — 보조 지표 로깅용 ===
+                    if C == 2 and np.unique(y_i).size == 2:
+                        pos_idx = int(self.hparams.positive_class_index)
+                        pos_scores_i_t = probs[:, pos_idx]
+
+                        use_thr_fb_i = 0.5
+                        if getattr(self.hparams, "use_fbeta_threshold", False):
+                            beta = float(getattr(self.hparams, "fbeta_beta", 2.0))
+                            if mode in ["val", "valid", "validation"] and getattr(self.hparams, "fbeta_scope", "per_target") == "per_target":
+                                best_thr_fb_i, best_Fb_i, p_b_i, r_b_i = self._best_threshold_fbeta(pos_scores_i_t, tg, beta=beta)
+                                self.eval_thresholds_fbeta["per_target"][i] = float(best_thr_fb_i)
+                                self.log(f"{mode}_thr_{i}_fbeta_candidate", float(best_thr_fb_i), sync_dist=True)
+                                self.log(f"{mode}_Fbeta_{i}_candidate", float(best_Fb_i), sync_dist=True)
+
+                            if getattr(self.hparams, "fbeta_scope", "per_target") == "per_target":
+                                use_thr_fb_i = float(self.eval_thresholds_fbeta["per_target"].get(i, 0.5))
+                            else:
+                                use_thr_fb_i = float(self.eval_thresholds_fbeta.get("global", 0.5))
+
+                        preds_fb_i_np = (pos_scores_i_t.detach().cpu().numpy() >= use_thr_fb_i).astype(int)
+                        cm_fb_i = confusion_matrix(y_i, preds_fb_i_np, labels=[0, 1])
+                        if cm_fb_i.shape == (2, 2):
+                            tn_fb_i, fp_fb_i, fn_fb_i, tp_fb_i = cm_fb_i.ravel()
+                        else:
+                            tn_fb_i = cm_fb_i[0, 0] if cm_fb_i.shape[0] > 0 and cm_fb_i.shape[1] > 0 else 0
+                            fp_fb_i = cm_fb_i[0, 1] if cm_fb_i.shape[0] > 0 and cm_fb_i.shape[1] > 1 else 0
+                            fn_fb_i = cm_fb_i[1, 0] if cm_fb_i.shape[0] > 1 and cm_fb_i.shape[1] > 0 else 0
+                            tp_fb_i = cm_fb_i[1, 1] if cm_fb_i.shape[0] > 1 and cm_fb_i.shape[1] > 1 else 0
+
+                        def _safe_div(a, b): 
+                            return float(a) / float(b) if (b is not None and b != 0) else 0.0
+
+                        recall_pos_fb_i    = _safe_div(tp_fb_i, tp_fb_i + fn_fb_i)
+                        precision_pos_fb_i = _safe_div(tp_fb_i, tp_fb_i + fp_fb_i)
+                        beta = float(getattr(self.hparams, "fbeta_beta", 2.0))
+                        beta2 = beta * beta
+                        denom_i = (beta2 * precision_pos_fb_i + recall_pos_fb_i)
+                        Fbeta_i_used = ((1 + beta2) * precision_pos_fb_i * recall_pos_fb_i / denom_i) if denom_i > 0 else 0.0
+
+                        # 로깅(접미사 _fbeta_)
+                        self.log(f"{mode}_thr_{i}_fbeta_used", use_thr_fb_i, sync_dist=True)
+                        self.log(f"{mode}_recall_pos_{i}_fbeta", recall_pos_fb_i, sync_dist=True)
+                        self.log(f"{mode}_precision_pos_{i}_fbeta", precision_pos_fb_i, sync_dist=True)
+                        self.log(f"{mode}_Fbeta_{i}_used", Fbeta_i_used, sync_dist=True)
+                        self.log(f"{mode}_TP_{i}_fbeta", tp_fb_i, sync_dist=True)
+                        self.log(f"{mode}_FP_{i}_fbeta", fp_fb_i, sync_dist=True)
+                        self.log(f"{mode}_TN_{i}_fbeta", tn_fb_i, sync_dist=True)
+                        self.log(f"{mode}_FN_{i}_fbeta", fn_fb_i, sync_dist=True)
+                    # === [추가 끝] ===
+
         elif self.hparams.downstream_task_type == 'regression':
             # --- 공통 하이퍼/헬퍼 호출 (가변 길이 지원) ---
             t  = self.hparams.img_size[3]                # window length (e.g., 30)
@@ -907,7 +1050,8 @@ class LitClassifier(pl.LightningModule):
         # others
         group.add_argument("--scalability_check", action='store_true', help="whether to check scalability")
         group.add_argument("--process_code", default=None, help="Slurm code/PBS code. Use this argument if you want to save process codes to your log")
-        group.add_argument("--pos_weight", action='store_true', help="positive class weight for imbalanced datasets") # kimbo change
+        group.add_argument("--pos_weight_value", type=float, default=None,
+                   help="Positive class weight (e.g., N_neg/N_pos)") # kimbo changes
 
         # decoder related
         group.add_argument("--num_classes", type=int, default=2, help="Number of distinct target classes")
@@ -919,6 +1063,16 @@ class LitClassifier(pl.LightningModule):
         group.add_argument("--use_youden_threshold", action='store_true', help="whether to use Youden's J statistic to determine the optimal threshold for binary classification") # kimbo change
         group.add_argument("--threshold_scope", type=str, default="per_target",  choices=['per_target', 'global'], help="Scope of thresholding: 'per_target' applies thresholds individually for each target; 'global' applies a single threshold across all targets.")
         group.add_argument("--positive_class_index", type=int, default=1, help="Index of the positive class for binary classification tasks.")
+
+        # F-beta cutoff related
+        group.add_argument("--use_fbeta_threshold", action="store_true",
+                        help="Use F-beta score to determine optimal threshold (as auxiliary evaluation).")
+        group.add_argument("--fbeta_beta", type=float, default=2.0,
+                        help="Beta value for F-beta (β>1 gives more weight to recall).")
+        group.add_argument("--fbeta_scope", type=str, default="per_target",
+                        choices=['per_target', 'global'],
+                        help="Scope for F-beta thresholding: per_target or global.")
+
 
 
         return parser
