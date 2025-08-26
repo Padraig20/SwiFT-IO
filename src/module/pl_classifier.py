@@ -26,6 +26,8 @@ import wandb
 import copy
 import pdb
 
+from .metrics.thresholds import best_threshold_youden, best_threshold_fbeta
+
 import torch
 # --- 필요한 모든 torchmetrics 임포트 ---
 from torchmetrics.classification import (
@@ -299,81 +301,21 @@ class LitClassifier(pl.LightningModule):
         )
         return loss
 
+    def _best_threshold_youden(self, pos_scores, y_true):
+        # Find the best cutoff (decision threshold) using Youden's J statistic.
+        # WHY: In imbalanced data, the default 0.5 cutoff may not give good results.
+        #      Youden's J tries to balance sensitivity (TPR) and specificity (TNR).
+        # USE: This threshold is later used in validation/test to decide
+        #      if a sample is positive (1) or negative (0).
+        return best_threshold_youden(pos_scores, y_true)
 
-    def _best_threshold_youden(self, pos_scores: torch.Tensor, y_true: torch.Tensor):
-        """
-        pos_scores: (N,) 양성 클래스 점수(확률) [0,1]
-        y_true:     (N,) {0,1}
-        return: best_threshold(float), best_J(float), tpr_at_best(float), fpr_at_best(float)
-        """
-        with torch.no_grad():
-            # 내림차순 정렬(점수 높을수록 양성)
-            scores = pos_scores.detach().flatten().cpu().to(torch.float64)
-            y = y_true.detach().flatten().cpu().to(torch.int64)
-            scores, idx = torch.sort(scores, descending=True)
-            y = y[idx]
-
-            P = int((y == 1).sum().item())
-            N = int((y == 0).sum().item())
-            if P == 0 or N == 0:
-                # 한 클래스만 있으면 ROC/Youden 정의 불가 → 기본값 반환
-                return 0.5, 0.0, 0.0, 0.0
-
-            # 누적 TP/FP
-            tp_cum = torch.cumsum((y == 1).to(torch.int64), dim=0)  # 길이 N
-            fp_cum = torch.cumsum((y == 0).to(torch.int64), dim=0)
-
-            # TPR/FPR
-            tpr = tp_cum.to(torch.float64) / P
-            fpr = fp_cum.to(torch.float64) / N
-
-            # 점수가 같은 연속 구간 중 '첫 발생 지점'만 사용 (unique_consecutive 대체)
-            # mask[k] == True 이면 scores[k] 가 새로운 값의 첫 위치
-            mask = torch.ones_like(scores, dtype=torch.bool)
-            if scores.numel() > 1:
-                mask[1:] = scores[1:] != scores[:-1]
-
-            scores_u = scores[mask]
-            tpr_u = tpr[mask]
-            fpr_u = fpr[mask]
-
-            J_u = tpr_u - fpr_u
-            best_i = int(torch.argmax(J_u).item())
-            best_thr = float(scores_u[best_i].item())
-            return best_thr, float(J_u[best_i].item()), float(tpr_u[best_i].item()), float(fpr_u[best_i].item())
-
-    def _best_threshold_fbeta(self, pos_scores: torch.Tensor, y_true: torch.Tensor, beta: float = 2.0):
-        """
-        pos_scores: (N,) 양성 확률 [0,1] (torch tensor)
-        y_true:     (N,) {0,1} (torch tensor)
-        return: (best_thr, best_Fbeta, precision_at_best, recall_at_best)
-        메모:
-        - precision_recall_curve는 thresholds 길이가 (n_points-1) 입니다.
-        - edge case(모두 같은 점수 등)에서는 기본 0.5 반환.
-        """
-        with torch.no_grad():
-            y = y_true.detach().flatten().cpu().to(torch.int64).numpy()
-            s = pos_scores.detach().flatten().cpu().to(torch.float64).numpy()
-
-            # 양성/음성 단일 클래스면 F-beta 의미 없음
-            if np.unique(y).size < 2:
-                return 0.5, 0.0, 0.0, 0.0
-
-            p, r, thr = precision_recall_curve(y, s)  # p,r 길이 = len(thr)+1
-            if thr.size == 0:
-                return 0.5, 0.0, 0.0, 0.0
-
-            # PR커브의 각 threshold 지점에 대해 F_beta 계산 (p[1:], r[1:])이 thr과 정렬상 대응
-            beta2 = float(beta) * float(beta)
-            num = (1 + beta2) * (p[1:] * r[1:])
-            den = (beta2 * p[1:] + r[1:])
-            with np.errstate(divide='ignore', invalid='ignore'):
-                f = np.where(den > 0, num / den, 0.0)
-
-            k = int(np.nanargmax(f))
-            best_thr = float(thr[k])
-            return best_thr, float(f[k]), float(p[k+1]), float(r[k+1])
-
+    def _best_threshold_fbeta(self, pos_scores, y_true, beta: float = 2.0):
+        # Find the best cutoff using the F-beta score.
+        # WHY: Sometimes we care more about recall (catching positives) than precision.
+        #      By setting beta > 1, the method prefers thresholds with higher recall.
+        # USE: This chosen threshold is applied to predicted probabilities
+        #      during validation/test, to get better performance for the task goal.
+        return best_threshold_fbeta(pos_scores, y_true, beta=beta)
 
 
     def _evaluate_metrics(self, subj_array, total_out, mode):
@@ -835,6 +777,55 @@ class LitClassifier(pl.LightningModule):
         returning subject IDs and corresponding predictions for evaluation.
         """
         subj, logits, target = self._compute_logits(batch) #(b, num_classes)
+
+        # ===== [추가] 배치 단위 validation 지표 로깅 (이름 충돌 방지: *_step) =====
+        try:
+            if self.hparams.downstream_task_type == 'classification':
+                _logits = logits
+                _target = target
+                if self.hparams.decoder == 'series_decoder':    # [b, (t*ta), C]로 변환
+                    _logits = rearrange(_logits, 'b tta c -> (b tta) c')
+                    _target = _target.flatten()
+
+                num_classes = _logits.size(-1)
+                if num_classes == 2 and self.hparams.num_classes == 2:
+                    # Binary: BCEWithLogits + step acc
+                    binary_logit = _logits[:, 1] - _logits[:, 0]
+                    target_f = _target.float().clamp(0, 1)
+                    batch_loss = F.binary_cross_entropy_with_logits(binary_logit, target_f)
+                    batch_pred = (binary_logit > 0).long()
+                    batch_acc  = (batch_pred == _target.long()).float().mean()
+                else:
+                    batch_loss = F.cross_entropy(_logits, _target.long())
+                    batch_acc  = self.metric.get_accuracy(_logits, _target.float().squeeze())
+
+                self.log_dict(
+                    {"valid_loss_step": batch_loss, "valid_acc_step": batch_acc},
+                    prog_bar=True,
+                    on_step=True,    # 배치별로 업데이트
+                    on_epoch=False,  # 에폭 집계는 기존 validation_epoch_end가 담당
+                    add_dataloader_idx=False,
+                    sync_dist=False,  # DDP에서 평균 원하면 True로
+                    batch_size=self.hparams.batch_size,
+                )
+
+            elif self.hparams.downstream_task_type == 'regression':
+                batch_mse = F.mse_loss(logits.squeeze(), target.squeeze())
+                batch_mae = F.l1_loss(logits.squeeze(), target.squeeze())
+                self.log_dict(
+                    {"valid_mse_step": batch_mse, "valid_mae_step": batch_mae},
+                    prog_bar=False,
+                    on_step=True,
+                    on_epoch=False,
+                    add_dataloader_idx=False,
+                    sync_dist=False,
+                    batch_size=self.hparams.batch_size,
+                )
+        except Exception as e:
+            # 배치 로깅은 보조 지표이므로 실패해도 학습은 진행
+            print(f"[warn] validation_step batch-metric logging skipped due to: {e}")
+        # ===== [추가 끝] =====
+
         if self.hparams.decoder == 'series_decoder': # (batch, T, E) -> (batch, T*E)
             output = [(logit.cpu().detach(), targets.cpu()) for logit, targets in zip(logits, target)] # target is not single value, item() cannot be invoked
         else:
@@ -842,41 +833,46 @@ class LitClassifier(pl.LightningModule):
         return (subj, output) # output은 배치 개수로 구성된 list. output[0]의 경우, [torch.Size([210, 2]), torch.Size([210])]
 
     def validation_epoch_end(self, outputs):
-        """
-        Aggregates and processes validation and test outputs at the end of an epoch. 
-        Evaluates metrics for both datasets and optionally saves model predictions for future analysis.
-        """
-        if self.valid_only: # kimbo change
-            outputs_valid = outputs  # outputs 자체가 validation 출력 리스트라 가정
-            outputs_test = []   
-        outputs_valid = outputs[0]
-        outputs_test = outputs[1]
-        subj_valid = []
-        subj_test = []
-        out_valid_list = []
-        out_test_list = []
+        # If we only have validation loader (valid_only=True)
+        # → outputs is just validation results
+        # Otherwise (validation + test loaders together)
+        # → outputs is [validation_results, test_results]
+        if self.valid_only:
+            outputs_valid = outputs
+            outputs_test = []
+        else:
+            try:
+                # Try to split into validation and test results
+                outputs_valid, outputs_test = outputs
+            except Exception:
+                # Safety: if there is only one, treat it as validation
+                outputs_valid = outputs
+                outputs_test = []
+
+        # Collect subject IDs and predictions for validation
+        subj_valid, out_valid_list = [], []
         for subj, out in outputs_valid:
             subj_valid += subj
             out_valid_list.append(out)
-        for subj, out in outputs_test:
-            subj_test += subj
-            out_test_list.append(out)
         subj_valid = np.array(subj_valid)
-        subj_test = np.array(subj_test)
         total_out_valid = [item for sublist in out_valid_list for item in sublist]
-        if not self.valid_only:
+
+        # Do the same for test if available
+        if outputs_test:
+            subj_test, out_test_list = [], []
+            for subj, out in outputs_test:
+                subj_test += subj
+                out_test_list.append(out)
+            subj_test = np.array(subj_test)
             total_out_test = [item for sublist in out_test_list for item in sublist]
 
-
-        # save model predictions if it is needed for future analysis
-        # self._save_predictions(subj_valid,total_out_valid,mode="valid")
-        # self._save_predictions(subj_test,total_out_test, mode="test") 
-                
-        # evaluate 
+        # Evaluate validation metrics
         self._evaluate_metrics(subj_valid, total_out_valid, mode="valid")
-        if self.hparams.valid_only == False:
+        # If we also have test, evaluate test metrics too
+        if not self.valid_only and outputs_test:
             self._evaluate_metrics(subj_test, total_out_test, mode="test")
-            
+
+
     # If you use loggers other than Neptune you may need to modify this
     def _save_predictions(self,total_subjs,total_out, mode):
         self.subject_accuracy = {}

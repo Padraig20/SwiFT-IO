@@ -170,6 +170,19 @@ def cli_main():
         tags.append(f"dataset={args.dataset_name}")
         tags.append(f"seed={args.seed}")
 
+        # --- Thresholding / F-beta related tags ---
+        if getattr(args, "use_youden_threshold", False):
+            tags.append("thr=youden")
+            tags.append(f"thr_scope={args.threshold_scope}")           # per_target or global
+            tags.append(f"pos_idx={args.positive_class_index}")        # e.g., 1
+
+        if getattr(args, "use_fbeta_threshold", False):
+            tags.append("fbeta=on")
+            tags.append(f"fbeta_scope={args.fbeta_scope}")             # per_target or global
+            # beta 값도 기록(기본 2.0)
+            if hasattr(args, "fbeta_beta"):
+                tags.append(f"beta={args.fbeta_beta}")
+
         # HRF 관련
         if getattr(args, "adjust_hrf", False):
             tags.append("adjust_hrf")
@@ -218,13 +231,20 @@ def cli_main():
         
         # Lightning에서 사용할 logger 객체로 교체
         logger = wandb_logger
-        # run_id를 args.id로 저장(추후에 Slurm 재실행 시 --> --run_id <args.id> 로 넣을 수 있게)
-        if exp_id is None:
-            setattr(args, "id", logger.experiment.id)  # W&B Experiment ID 저장
-        print(f"default_root_dir: {args.default_root_dir}") # output/moviefmri
-        # dirpath = os.path.join(args.default_root_dir, logger.version)
-        dirpath = os.path.join(args.default_root_dir, str(logger.version) if logger.version is not None else "default_version")
+        if args.loggername == "wandb":
+            run_id = logger.experiment.id          # 예: 'fgaqhe3w'
+            # (재시작 시에는 args.run_id가 우선)
+            if getattr(args, "resume", False) and args.run_id:
+                run_id = args.run_id
+            dirpath = os.path.join(args.default_root_dir, run_id)
+        else: 
+            dirpath = os.path.join(args.default_root_dir, str(logger.version) if logger.version is not None else "default_version")
 
+        # if exp_id is None:
+        #     setattr(args, "id", logger.experiment.id)  # W&B Experiment ID 저장
+        # print(f"default_root_dir: {args.default_root_dir}") # output/moviefmri
+        # # dirpath = os.path.join(args.default_root_dir, logger.version)
+        # dirpath = os.path.join(args.default_root_dir, str(logger.version) if logger.version is not None else "default_version")
 
     else:
         raise Exception("Wrong logger name.")
