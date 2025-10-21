@@ -101,7 +101,7 @@ class HBN(BaseDataset):
                 output_start_frame = start_frame
                 if not (0 <= input_start_frame < session_duration and 0 <= output_start_frame < session_duration):
                     continue
-                if self.decoder == 'series_decoder':
+                if self.decoder in ['series_decoder', 'lstm_regression_head', 'lstm_series_regression_head']:
                     data_tuple = (i,
                                 subject_name,
                                 subject_path,

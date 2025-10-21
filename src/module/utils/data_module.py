@@ -42,6 +42,13 @@ class fMRIDataModule(pl.LightningDataModule):
         df = pd.read_csv(metadata_csv_path)
         df["SUBJECT_ID"] = df["SUBJECT_ID"].astype(str)
         subject_ids = set(str(sid) for sid in subject_dict)
+
+        # Debug: print sample IDs
+        print(f"\n[DEBUG] Sample metadata SUBJECT_IDs: {list(df['SUBJECT_ID'].head(3))}")
+        print(f"[DEBUG] Sample data subject_ids: {list(list(subject_ids)[:3])}")
+        print(f"[DEBUG] Total metadata subjects: {len(df)}")
+        print(f"[DEBUG] Total data subjects: {len(subject_ids)}")
+
         df = df[df["SUBJECT_ID"].isin(subject_ids)].copy()
 
         if df.empty:
@@ -124,7 +131,7 @@ class fMRIDataModule(pl.LightningDataModule):
                         sex = meta_task[meta_task["SUBJECT_ID"]==subject]["sex"].values[0]
                         final_dict[subject]=[sex,target]
 
-            elif self.hparams.decoder == 'series_decoder':
+            elif self.hparams.decoder in ['series_decoder', 'lstm_regression_head', 'lstm_series_regression_head']:
                 if self.hparams.downstream_task == 'emotions': task_name = emotions
                 elif self.hparams.downstream_task == 'contents': task_name = contents
                 elif self.hparams.downstream_task == 'features': task_name = features
@@ -134,8 +141,10 @@ class fMRIDataModule(pl.LightningDataModule):
                     task_name = [x + "_conv" for x in task_name]  # kimbo change
                 elif self.hparams.downstream_task_type == 'regression' and self.hparams.adjust_hrf == False:  # kimbo change
                     task_name = [x for x in task_name]  # kimbo change
-                elif self.hparams.downstream_task_type == 'classification':  # kimbo change
-                    task_name = [x + "_conv_mean_binary" for x in task_name]  # kimbo change
+                elif self.hparams.downstream_task_type == 'classification' and self.hparams.adjust_hrf == True:  # kimbo change
+                    task_name = [x + "_conv_binary" for x in task_name]  # kimbo change
+                elif self.hparams.downstream_task_type == 'classification' and self.hparams.adjust_hrf == False:  # kimbo change
+                    task_name = [x + "_binary" for x in task_name]  # kimbo change
                 else:
                     raise ValueError('downstream task type not supported')
                 

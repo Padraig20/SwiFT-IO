@@ -164,19 +164,25 @@ class LitClassifier(pl.LightningModule):
         if self.hparams.downstream_task_type == 'classification':
             logits = self.output_head(feature).squeeze() # (b,num_classes)  /  (b,t,num_targets,num_classes)
             target = target_value.float().squeeze()      # (b,num_classes)  /  (b,t,num_targets,num_classes)
-            if self.hparams.decoder == 'series_decoder':
+            if self.hparams.decoder in ['series_decoder', 'lstm_series_regression_head']:
                 logits = rearrange(logits, 'b t ta c -> b (t ta) c')
                 target = rearrange(target, 'b t ta -> b (t ta)')
         # Regression task
         elif self.hparams.downstream_task_type == 'regression':
-            
-            logits = self.output_head(feature) # (b,1)
-            unnormalized_target = target_value.float() # (b,1)
-            
-            if self.hparams.decoder == 'series_decoder': # (batch, T, E) -> (batch, T*E)
+
+            logits = self.output_head(feature) # (b,1) or (b, num_targets)
+            unnormalized_target = target_value.float() # (b,1) or (b, t, num_targets)
+
+            if self.hparams.decoder in ['series_decoder', 'lstm_series_regression_head']: # (batch, T, E) -> (batch, T*E)
                 logits = logits.view(logits.size(0), -1)
                 unnormalized_target = unnormalized_target.view(unnormalized_target.size(0), -1)
-            
+            elif self.hparams.decoder == 'lstm_regression_head':
+                # LSTM outputs single prediction per sequence, average target across time
+                # unnormalized_target shape: (batch, time, num_targets)
+                # logits shape: (batch, num_targets)
+                if unnormalized_target.dim() == 3:
+                    unnormalized_target = unnormalized_target.mean(dim=1)  # (batch, num_targets)
+
             if self.hparams.label_scaling_method == 'standardization': # default
                 target = (unnormalized_target - self.scaler.mean_[0]) / (self.scaler.scale_[0])
             elif self.hparams.label_scaling_method == 'minmax':
@@ -184,34 +190,86 @@ class LitClassifier(pl.LightningModule):
             
         return subj, logits, target
     
+    # def _calculate_loss(self, batch, mode):
+    #     """
+    #     Calculates the loss and performance metrics for classification or regression tasks. 
+    #     Logs the results for monitoring during training or evaluation.
+    #     """
+    #     subj, logits, target = self._compute_logits(batch, augment_during_training = self.hparams.augment_during_training)
+
+    #     if self.hparams.downstream_task_type == 'classification':
+    #         if self.hparams.decoder in ['series_decoder', 'lstm_series_regression_head']: # [b, (t ta), c] -> [(b t ta), c]
+    #             logits = rearrange(logits, 'b tta c -> (b tta) c')
+    #             target = target.flatten() # (b,c) -> (b*c)
+    #         loss = F.cross_entropy(logits, target.long()) # target is float
+    #         acc = self.metric.get_accuracy(logits, target.float().squeeze())
+    #         result_dict = {
+    #             f"{mode}_loss": loss,
+    #             f"{mode}_acc": acc,
+    #         }
+
+    #     elif self.hparams.downstream_task_type == 'regression':
+    #         loss = F.mse_loss(logits.squeeze(), target.squeeze())
+    #         l1 = F.l1_loss(logits.squeeze(), target.squeeze())
+    #         result_dict = {
+    #             f"{mode}_loss": loss,
+    #             f"{mode}_mse": loss,
+    #             f"{mode}_l1_loss": l1
+    #         }
+    #     self.log_dict(result_dict, prog_bar=True, sync_dist=False, add_dataloader_idx=False, on_step=True, on_epoch=True, batch_size=self.hparams.batch_size)
+    #     return loss
+    
     def _calculate_loss(self, batch, mode):
-        """
-        Calculates the loss and performance metrics for classification or regression tasks. 
-        Logs the results for monitoring during training or evaluation.
-        """
-        subj, logits, target = self._compute_logits(batch, augment_during_training = self.hparams.augment_during_training)
+        subj, logits, target = self._compute_logits(batch, augment_during_training=self.hparams.augment_during_training, mode=mode)
+
+        result_dict = {}
 
         if self.hparams.downstream_task_type == 'classification':
-            if self.hparams.decoder == 'series_decoder': # [b, (t ta), c] -> [(b t ta), c]
+            if self.hparams.decoder in ['series_decoder', 'lstm_series_regression_head']:
                 logits = rearrange(logits, 'b tta c -> (b tta) c')
-                target = target.flatten() # (b,c) -> (b*c)
-            loss = F.cross_entropy(logits, target.long()) # target is float
+                target = target.flatten()
+            loss = F.cross_entropy(logits, target.long())
             acc = self.metric.get_accuracy(logits, target.float().squeeze())
-            result_dict = {
+            result_dict.update({
                 f"{mode}_loss": loss,
                 f"{mode}_acc": acc,
-            }
+            })
 
         elif self.hparams.downstream_task_type == 'regression':
-            loss = F.mse_loss(logits.squeeze(), target.squeeze())
+            if self.hparams.decoder in ['series_decoder', 'lstm_series_regression_head']:
+                B, TE = logits.shape  # (B, T*E)
+                E = self.hparams.num_targets
+                T = TE // E
+                logits = logits.view(B, T, E)
+                target = target.view(B, T, E)
+
+                loss_list = []
+                for i in range(E):
+                    mse_i = F.mse_loss(logits[:, :, i], target[:, :, i])
+                    result_dict[f"{mode}_mse_emotion_{i}"] = mse_i  # wandb 기록용
+                    loss_list.append(mse_i)
+                loss = sum(loss_list) / E
+            else:
+                loss = F.mse_loss(logits.squeeze(), target.squeeze())
+                result_dict[f"{mode}_mse"] = loss
+
             l1 = F.l1_loss(logits.squeeze(), target.squeeze())
-            result_dict = {
-                f"{mode}_loss": loss,
-                f"{mode}_mse": loss,
-                f"{mode}_l1_loss": l1
-            }
-        self.log_dict(result_dict, prog_bar=True, sync_dist=False, add_dataloader_idx=False, on_step=True, on_epoch=True, batch_size=self.hparams.batch_size)
+            result_dict[f"{mode}_loss"] = loss
+            result_dict[f"{mode}_l1_loss"] = l1
+
+        # ✅ loss 및 각 감정별 mse를 wandb에 기록
+        self.log_dict(
+            result_dict,
+            prog_bar=True,
+            sync_dist=False,
+            add_dataloader_idx=False,
+            on_step=True,
+            on_epoch=True,
+            batch_size=self.hparams.batch_size
+        )
+
         return loss
+
 
     def _evaluate_metrics(self, subj_array, total_out, mode, best=False):
         """
@@ -225,23 +283,27 @@ class LitClassifier(pl.LightningModule):
         subj_targets = []
         for subj in subjects:
             subj_logits = [total_out[i][0] for i in range(len(subj_array)) if subj_array[i] == subj]
-            if self.hparams.decoder == 'series_decoder': # do not calculate the average logits
+            if self.hparams.decoder in ['series_decoder', 'lstm_series_regression_head']: # do not calculate the average logits
                 subj_avg_logits.append(subj_logits)
             else:
                 subj_avg_logits.append(torch.mean(torch.stack(subj_logits), dim=0))
             subj_targets.append([total_out[i][1] for i in range(len(subj_array)) if subj_array[i] == subj][0])
-    
-        if self.hparams.decoder == 'series_decoder':
+
+        if self.hparams.decoder in ['series_decoder', 'lstm_series_regression_head']:
             subj_avg_logits = [i[0] for i in subj_avg_logits] # unpack single values from the list
             subj_avg_logits = torch.stack(subj_avg_logits)
             subj_targets = torch.stack(subj_targets)
         else:
             subj_avg_logits = torch.stack(subj_avg_logits)
-            subj_targets = torch.tensor(subj_targets)
+            # Check if targets are already tensors (multi-target regression)
+            if len(subj_targets) > 0 and isinstance(subj_targets[0], torch.Tensor):
+                subj_targets = torch.stack(subj_targets)
+            else:
+                subj_targets = torch.tensor(subj_targets)
     
         if self.hparams.downstream_task_type == 'classification':
             
-            if self.hparams.decoder == 'series_decoder':
+            if self.hparams.decoder in ['series_decoder', 'lstm_series_regression_head']:
                 subj_avg_logits = rearrange(subj_avg_logits, 'b tta c -> (b tta) c')
                 subj_targets = subj_targets.flatten()
                 
@@ -262,7 +324,7 @@ class LitClassifier(pl.LightningModule):
                 targets_one_hot = label_binarize(targets_np, classes=np.arange(num_classes))
                 roc_auc = roc_auc_score(targets_one_hot, probabilities.cpu().detach().numpy(), multi_class='ovr')
 
-            if self.hparams.decoder == 'series_decoder':
+            if self.hparams.decoder in ['series_decoder', 'lstm_series_regression_head']:
                 
                 # evaluate multiple targets separately
                 t = self.hparams.img_size[3]
@@ -313,14 +375,14 @@ class LitClassifier(pl.LightningModule):
             pearson = PearsonCorrCoef()
             r2_score = R2Score()
             
-            if self.hparams.decoder == 'series_decoder':
+            if self.hparams.decoder in ['series_decoder', 'lstm_series_regression_head']:
                 pearson_coef = pearson(subj_avg_logits.flatten(), subj_targets.flatten())
                 r2 = r2_score(subj_avg_logits.flatten(), subj_targets.flatten()) if len(subj_avg_logits) >=2 else 0
             else:
                 pearson_coef = pearson(subj_avg_logits, subj_targets)
                 r2 = r2_score(subj_avg_logits, subj_targets) if len(subj_avg_logits) >=2 else 0
             
-            if self.hparams.decoder == 'series_decoder':
+            if self.hparams.decoder in ['series_decoder', 'lstm_series_regression_head']:
                 
                 # evaluate multiple targets separately
                 t = self.hparams.img_size[3]
@@ -369,14 +431,33 @@ class LitClassifier(pl.LightningModule):
 
     def validation_step(self, batch, batch_idx, dataloader_idx):
         """
-        Processes a single validation batch to compute logits and targets, 
+        Processes a single validation batch to compute logits and targets,
         returning subject IDs and corresponding predictions for evaluation.
         """
         subj, logits, target = self._compute_logits(batch) #(b, num_classes)
-        if self.hparams.decoder == 'series_decoder': # (batch, T, E) -> (batch, T*E)
-            output = [(logit.cpu().detach(), targets.cpu()) for logit, targets in zip(logits, target)] # target is not single value, item() cannot be invoked
+
+        # Debug: print decoder type and target shape
+        if batch_idx == 0:
+            print(f"[DEBUG] decoder type: {self.hparams.decoder}")
+            print(f"[DEBUG] target shape: {target.shape if hasattr(target, 'shape') else type(target)}")
+            print(f"[DEBUG] logits shape: {logits.shape if hasattr(logits, 'shape') else type(logits)}")
+
+        # Handle multi-target regression (LSTM series regression head, series decoder)
+        # Check if target is multi-dimensional per sample
+        if self.hparams.decoder in ['series_decoder', 'lstm_series_regression_head']:
+            output = [(logit.cpu().detach(), targets.cpu()) for logit, targets in zip(logits, target)]
+        elif self.hparams.decoder == 'lstm_regression_head':
+            # LSTM regression head outputs single value per sequence
+            output = [(logit.cpu().detach(), targets.cpu()) for logit, targets in zip(logits, target)]
         else:
-            output = [(logit.cpu().detach(), targets.cpu().item()) for logit, targets in zip(logits, target)]
+            # Single value target - check if it's actually a scalar
+            output = []
+            for logit, targets in zip(logits, target):
+                if targets.numel() == 1:
+                    output.append((logit.cpu().detach(), targets.cpu().item()))
+                else:
+                    # Multi-element target, keep as tensor
+                    output.append((logit.cpu().detach(), targets.cpu()))
         return (subj, output)
 
     def validation_epoch_end(self, outputs):
@@ -467,7 +548,7 @@ class LitClassifier(pl.LightningModule):
         returning subject IDs and corresponding predictions for evaluation.
         """
         subj, logits, target = self._compute_logits(batch) #(b, num_classes)
-        if self.hparams.decoder == 'series_decoder': # (batch, T, E) -> (batch, T*E)
+        if self.hparams.decoder in ['series_decoder', 'lstm_regression_head']: # (batch, T, E) -> (batch, T*E)
             output = [(logit.cpu().detach(), targets.cpu()) for logit, targets in zip(logits, target)] # target is not single value, item() cannot be invoked
         else:
             output = [(logit.cpu().detach(), targets.cpu().item()) for logit, targets in zip(logits, target)]

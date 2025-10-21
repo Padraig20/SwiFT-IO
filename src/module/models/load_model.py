@@ -1,7 +1,9 @@
 from .encoder.swin4d_transformer_ver7 import SwinTransformer4D
 from .encoder.swin4d_transformer_ver9 import SwinTransformer4D
+from .encoder.lstm_encoder import LSTMEncoder, LSTMEncoderLight
 from .decoder.single_target_decoder import SingleTargetDecoder
 from .decoder.series_decoder import SeriesDecoder
+from .decoder.lstm_decoder import LSTMRegressionHead, LSTMSeriesRegressionHead
 
 def load_model(model_name, hparams=None):
 
@@ -94,6 +96,48 @@ def load_model(model_name, hparams=None):
             #num_output_query_channels=hparams.num_output_query_channels,
             num_classes=num_classes,
             num_targets=hparams.num_targets
+        )
+    elif model_name == "lstm_encoder":
+        net = LSTMEncoder(
+            hidden_dim=getattr(hparams, 'lstm_hidden_dim', 256),
+            num_layers=getattr(hparams, 'lstm_num_layers', 2),
+            dropout=getattr(hparams, 'lstm_dropout', 0.3),
+            pooling_type=getattr(hparams, 'lstm_pooling', 'adaptive'),
+            pooled_spatial_dim=getattr(hparams, 'lstm_pooled_dim', 16),
+            bidirectional=getattr(hparams, 'lstm_bidirectional', False),
+            return_sequence=False
+        )
+    elif model_name == "lstm_encoder_light":
+        net = LSTMEncoderLight(
+            hidden_dim=getattr(hparams, 'lstm_hidden_dim', 128),
+            num_layers=getattr(hparams, 'lstm_num_layers', 2),
+            dropout=getattr(hparams, 'lstm_dropout', 0.3),
+            pooled_spatial_dim=getattr(hparams, 'lstm_pooled_dim', 8)
+        )
+    elif model_name == "lstm_regression_head":
+        # Get LSTM encoder output dim
+        lstm_hidden = getattr(hparams, 'lstm_hidden_dim', 256)
+        lstm_bidirectional = getattr(hparams, 'lstm_bidirectional', False)
+        input_dim = lstm_hidden * (2 if lstm_bidirectional else 1)
+
+        net = LSTMRegressionHead(
+            input_dim=input_dim,
+            num_targets=hparams.num_targets,
+            hidden_dim=getattr(hparams, 'lstm_decoder_hidden', 128),
+            dropout=getattr(hparams, 'lstm_dropout', 0.3)
+        )
+    elif model_name == "lstm_series_regression_head":
+        # Get LSTM encoder output dim
+        lstm_hidden = getattr(hparams, 'lstm_hidden_dim', 256)
+        lstm_bidirectional = getattr(hparams, 'lstm_bidirectional', False)
+        input_dim = lstm_hidden * (2 if lstm_bidirectional else 1)
+
+        net = LSTMSeriesRegressionHead(
+            input_dim=input_dim,
+            num_timepoints=hparams.img_size[3],  # time dimension
+            num_targets=hparams.num_targets,
+            hidden_dim=getattr(hparams, 'lstm_decoder_hidden', 128),
+            dropout=getattr(hparams, 'lstm_dropout', 0.3)
         )
     else:
         raise NameError(f"{model_name} is a wrong model name")
