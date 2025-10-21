@@ -174,16 +174,16 @@ def cli_main():
             tags.append("valid_only")
         if args.test_only:
             tags.append("test_only")  # kimbo change
-        # run의 기타 특징들을 태그로 추가 가능
-        # tags.extend(["in_production", "preemptible", "baseline"])
 
+        os.environ["WANDB_ANONYMOUS"] = "allow"
         # W&B Logger 설정
         logger = WandbLogger(
             project=args.project_name,
             name=args.experiment_name if hasattr(args, "experiment_name") else None,
             config=vars(args),
             save_dir=args.default_root_dir,  # 로그 저장 경로 설정
-            tags = tags
+            tags = tags,
+            anonymous="allow"  # ✅ 이 옵션 반드시 추가
         )
 
         if exp_id is None:
