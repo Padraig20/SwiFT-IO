@@ -559,8 +559,22 @@ class SVRWithReduction:
                 Y_train = checkpoint['Y_train']
                 self.feature_dim = checkpoint['feature_dim']
             print(f"  Loaded X_train: {X_train.shape}, Y_train: {Y_train.shape}")
+
+            # Convert to float32 for memory efficiency
+            if X_train.dtype == np.float64:
+                print(f"  Converting X_train from {X_train.dtype} to float32 (saves ~50% memory)")
+                X_train = X_train.astype(np.float32)
+            if Y_train.dtype == np.float64:
+                Y_train = Y_train.astype(np.float32)
         else:
             X_train, Y_train = self.prepare_data_from_dataloader(train_dataloader, mode='train')
+
+            # Convert to float32 for memory efficiency
+            if X_train.dtype == np.float64:
+                print(f"  Converting data from {X_train.dtype} to float32 (saves ~50% memory)")
+                X_train = X_train.astype(np.float32)
+            if Y_train.dtype == np.float64:
+                Y_train = Y_train.astype(np.float32)
 
             # Save data checkpoint
             if data_checkpoint_path:
@@ -581,6 +595,10 @@ class SVRWithReduction:
         n_jobs = int(os.environ.get('SLURM_CPUS_PER_TASK',
                                      os.environ.get('SLURM_CPUS_ON_NODE',
                                                     multiprocessing.cpu_count())))
+        # Don't create more workers than tasks (emotions)
+        n_jobs = min(n_jobs, self.num_emotions)
+        # Memory-efficient: limit to 3 workers max to avoid OOM with large datasets
+        n_jobs = min(n_jobs, 3)
         print(f"\nTraining SVR models for each emotion using {n_jobs} CPUs in parallel...")
 
         # Parallel training for all emotions
@@ -682,6 +700,12 @@ class SVRWithReduction:
         # Prepare data
         X_eval, Y_eval = self.prepare_data_from_dataloader(dataloader, mode=mode)
 
+        # Convert to float32 for memory efficiency
+        if X_eval.dtype == np.float64:
+            X_eval = X_eval.astype(np.float32)
+        if Y_eval.dtype == np.float64:
+            Y_eval = Y_eval.astype(np.float32)
+
         # Predict for each emotion in parallel
         def predict_single_emotion(e):
             if self.standardize:
@@ -694,6 +718,10 @@ class SVRWithReduction:
         n_jobs = int(os.environ.get('SLURM_CPUS_PER_TASK',
                                      os.environ.get('SLURM_CPUS_ON_NODE',
                                                     multiprocessing.cpu_count())))
+        # Don't create more workers than tasks (emotions)
+        n_jobs = min(n_jobs, self.num_emotions)
+        # Memory-efficient: limit to 3 workers max to avoid OOM with large datasets
+        n_jobs = min(n_jobs, 3)
         all_predictions = Parallel(n_jobs=n_jobs, verbose=5)(
             delayed(predict_single_emotion)(e)
             for e in range(self.num_emotions)
