@@ -544,12 +544,12 @@ class LitClassifier(pl.LightningModule):
 
     def test_step(self, batch, batch_idx):
         """
-        Processes a single test batch to compute logits and targets, 
+        Processes a single test batch to compute logits and targets,
         returning subject IDs and corresponding predictions for evaluation.
         """
         subj, logits, target = self._compute_logits(batch) #(b, num_classes)
-        if self.hparams.decoder in ['series_decoder', 'lstm_regression_head']: # (batch, T, E) -> (batch, T*E)
-            output = [(logit.cpu().detach(), targets.cpu()) for logit, targets in zip(logits, target)] # target is not single value, item() cannot be invoked
+        if self.hparams.decoder in ['series_decoder', 'lstm_regression_head', 'lstm_series_regression_head']: # (batch, T, E) -> (batch, T*E)
+            output = [(logit.cpu().detach(), targets.cpu().detach()) for logit, targets in zip(logits, target)] # target is not single value, item() cannot be invoked
         else:
             output = [(logit.cpu().detach(), targets.cpu().item()) for logit, targets in zip(logits, target)]
         return (subj, output)

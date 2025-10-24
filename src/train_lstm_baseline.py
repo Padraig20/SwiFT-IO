@@ -133,7 +133,7 @@ def cli_main():
     if args.downstream_task_type == "classification":
         early_stop_callback = EarlyStopping(
             monitor='valid_acc',
-            patience=20,
+            patience=10,
             verbose=True,
             mode='max',
             check_on_train_epoch_end=True
@@ -141,7 +141,7 @@ def cli_main():
     else:  # regression
         early_stop_callback = EarlyStopping(
             monitor='valid_mse',
-            patience=20,
+            patience=10,
             verbose=True,
             mode='min',
             check_on_train_epoch_end=True

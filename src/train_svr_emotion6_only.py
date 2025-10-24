@@ -157,29 +157,76 @@ def main():
     print("\n[Step 6] Saving emotion 6 checkpoint...")
 
     checkpoint_path = os.path.join(args.checkpoint_dir, f'svr_emotion_{emotion_idx}_checkpoint.pkl')
+    backup_dir = os.path.expanduser('~/svr_checkpoints_backup')
+    backup_path = os.path.join(backup_dir, f'svr_emotion_{emotion_idx}_checkpoint.pkl')
+
     checkpoint = {
         'model': result['model'],
         'scaler': result['scaler']
     }
 
-    with open(checkpoint_path, 'wb') as f:
-        pickle.dump(checkpoint, f)
+    # Create backup directory if it doesn't exist
+    os.makedirs(backup_dir, exist_ok=True)
 
-    checkpoint_size = os.path.getsize(checkpoint_path) / 1024**2
-    print(f"✓ Checkpoint saved: {checkpoint_path}")
-    print(f"  - Size: {checkpoint_size:.1f} MB")
+    # Try to save to primary location first
+    primary_saved = False
+    backup_saved = False
 
-    # Save metrics
-    metrics_path = os.path.join(args.checkpoint_dir, 'train_metrics_emotion_6.json')
+    try:
+        with open(checkpoint_path, 'wb') as f:
+            pickle.dump(checkpoint, f)
+        checkpoint_size = os.path.getsize(checkpoint_path) / 1024**2
+        print(f"✓ Checkpoint saved (primary): {checkpoint_path}")
+        print(f"  - Size: {checkpoint_size:.1f} MB")
+        primary_saved = True
+    except OSError as e:
+        print(f"✗ Failed to save to primary location: {e}")
+        print(f"  Attempting backup save to home directory...")
+
+    # Save to backup location (either as backup or as primary if first failed)
+    try:
+        with open(backup_path, 'wb') as f:
+            pickle.dump(checkpoint, f)
+        backup_size = os.path.getsize(backup_path) / 1024**2
+        if primary_saved:
+            print(f"✓ Backup copy saved: {backup_path}")
+        else:
+            print(f"✓ Checkpoint saved (backup location): {backup_path}")
+        print(f"  - Size: {backup_size:.1f} MB")
+        backup_saved = True
+    except OSError as e:
+        print(f"✗ Failed to save to backup location: {e}")
+
+    if not primary_saved and not backup_saved:
+        raise RuntimeError("Failed to save checkpoint to both primary and backup locations!")
+
+    # Save metrics (try both locations)
     import json
-    with open(metrics_path, 'w') as f:
-        json.dump({
-            'train_mse_6': result['mse'],
-            'train_mae_6': result['mae'],
-            'train_r2_6': result['r2']
-        }, f, indent=2)
+    metrics_data = {
+        'train_mse_6': result['mse'],
+        'train_mae_6': result['mae'],
+        'train_r2_6': result['r2']
+    }
 
-    print(f"✓ Metrics saved: {metrics_path}")
+    metrics_path = os.path.join(args.checkpoint_dir, 'train_metrics_emotion_6.json')
+    backup_metrics_path = os.path.join(backup_dir, 'train_metrics_emotion_6.json')
+
+    try:
+        with open(metrics_path, 'w') as f:
+            json.dump(metrics_data, f, indent=2)
+        print(f"✓ Metrics saved (primary): {metrics_path}")
+    except OSError as e:
+        print(f"✗ Failed to save metrics to primary location: {e}")
+
+    try:
+        with open(backup_metrics_path, 'w') as f:
+            json.dump(metrics_data, f, indent=2)
+        if primary_saved:
+            print(f"✓ Metrics backup saved: {backup_metrics_path}")
+        else:
+            print(f"✓ Metrics saved (backup): {backup_metrics_path}")
+    except OSError as e:
+        print(f"✗ Failed to save metrics to backup location: {e}")
 
     print("\n" + "="*80)
     print("✓ Emotion 6 training completed successfully!")
