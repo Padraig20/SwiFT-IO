@@ -25,7 +25,7 @@ TRAINER_ARGS='--accelerator gpu --max_epochs 10 --precision 16 --num_nodes 1 --d
 MAIN_ARGS='--loggername neptune --dataset_name HBN --image_path /data/HBN/3.3.1.movieDM_MNI_to_TRs_smooth_znorm_241120'
 DATA_ARGS='--batch_size 8 --eval_batch_size 8 --num_workers 8 --input_type movieDM'
 DEFAULT_ARGS='--project_name movie-nersc'
-OPTIONAL_ARGS='--c_multiplier 2 --last_layer_full_MSA --clf_head_version v1 --downstream_task emotions --downstream_task_type regression' #--use_scheduler --gamma 0.5 --cycle 0.5' 
+OPTIONAL_ARGS='--c_multiplier 2 --last_layer_full_MSA --clf_head_version v1 --downstream_task emotions --downstream_task_type regression --use_scheduler --gamma 0.5 --cycle 0.5' 
 RESUME_ARGS='--adjust_hrf'
 
 export NEPTUNE_API_TOKEN="eyJhcGlfYWRkcmVzcyI6Imh0dHBzOi8vYXBwLm5lcHR1bmUuYWkiLCJhcGlfdXJsIjoiaHR0cHM6Ly9hcHAubmVwdHVuZS5haSIsImFwaV9rZXkiOiIxZTQ2NDY2ZS1mNGUwLTQ3YjQtYjVjNC02NWYzZTgwZjlkOTkifQ==" # when using neptune as a logger
