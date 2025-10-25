@@ -462,38 +462,46 @@ class LitClassifier(pl.LightningModule):
 
     def validation_epoch_end(self, outputs):
         """
-        Aggregates and processes validation and test outputs at the end of an epoch. 
+        Aggregates and processes validation and test outputs at the end of an epoch.
         Evaluates metrics for both datasets and optionally saves model predictions for future analysis.
         """
-        if self.valid_only: # kimbo change
-            outputs_valid = outputs  # outputs 자체가 validation 출력 리스트라 가정
-            outputs_test = []   
-        outputs_valid = outputs[0]
-        outputs_test = outputs[1]
+        # Fix: valid_only should properly handle single dataloader output
+        if self.valid_only:
+            outputs_valid = outputs
+            outputs_test = []
+        else:
+            outputs_valid = outputs[0]
+            outputs_test = outputs[1]
+
         subj_valid = []
         subj_test = []
         out_valid_list = []
         out_test_list = []
+
         for subj, out in outputs_valid:
             subj_valid += subj
             out_valid_list.append(out)
-        for subj, out in outputs_test:
-            subj_test += subj
-            out_test_list.append(out)
-        subj_valid = np.array(subj_valid)
-        subj_test = np.array(subj_test)
-        total_out_valid = [item for sublist in out_valid_list for item in sublist]
-        if not self.valid_only:
-            total_out_test = [item for sublist in out_test_list for item in sublist]
 
+        if not self.valid_only:
+            for subj, out in outputs_test:
+                subj_test += subj
+                out_test_list.append(out)
+
+        subj_valid = np.array(subj_valid)
+        total_out_valid = [item for sublist in out_valid_list for item in sublist]
+
+        if not self.valid_only:
+            subj_test = np.array(subj_test)
+            total_out_test = [item for sublist in out_test_list for item in sublist]
 
         # save model predictions if it is needed for future analysis
         # self._save_predictions(subj_valid,total_out_valid,mode="valid")
-        # self._save_predictions(subj_test,total_out_test, mode="test") 
-                
-        # evaluate 
+        # if not self.valid_only:
+        #     self._save_predictions(subj_test,total_out_test, mode="test")
+
+        # evaluate
         self._evaluate_metrics(subj_valid, total_out_valid, mode="valid")
-        if self.hparams.valid_only == False:
+        if not self.valid_only:
             self._evaluate_metrics(subj_test, total_out_test, mode="test")
             
     # If you use loggers other than Neptune you may need to modify this

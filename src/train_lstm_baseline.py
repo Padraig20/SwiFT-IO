@@ -239,7 +239,11 @@ def cli_main():
             # Resume existing run
             trainer.fit(model, datamodule=data_module, ckpt_path=args.resume_ckpt_path)
 
-        trainer.test(model, dataloaders=data_module, ckpt_path="best")
+        # Only run test if not valid_only mode
+        if not args.valid_only:
+            trainer.test(model, dataloaders=data_module, ckpt_path="best")
+        else:
+            print("\n--valid_only flag is set, skipping test evaluation")
 
     # Finish wandb session
     if args.loggername == "wandb":

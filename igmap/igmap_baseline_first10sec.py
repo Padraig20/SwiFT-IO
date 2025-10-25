@@ -188,8 +188,7 @@ def process_subject(args_tuple):
             print(f"[IG OK] {subject} - {emotion_label} TR{TR_index:03d} (baseline=first10sec)", flush=True)
 
         instance_count += 1
-        if instance_count >= 5:  # 처음 5개만 처리 (테스트용)
-            break
+        # Process all sequences (not just first 5)
 
     print(f"✅ Total time for {subject}: {time.time() - overall_start:.2f}s")
 

@@ -72,8 +72,23 @@ def compute_ig_on_prediction_average(input_ts, baseline, i, n_steps=10):
     for step_idx, s_input in enumerate(scaled_inputs):
         s_input = s_input.unsqueeze(0).requires_grad_(True)
         output = model(s_input)
+
+        # Debug: print output shape on first step
+        if step_idx == 0:
+            print(f"  [DEBUG] Model output shape: {output.shape}", flush=True)
+
         print(f"📈 IG step {step_idx+1}/{n_steps}, emotion: {emotion_labels[i]}", flush=True)
-        scalar = output[:, :, i].mean()  # Mean over batch and time
+
+        # Handle different output shapes
+        if output.dim() == 2:
+            # Output shape: [batch, emotions]
+            scalar = output[:, i].mean()
+        elif output.dim() == 3:
+            # Output shape: [batch, time, emotions]
+            scalar = output[:, :, i].mean()
+        else:
+            raise ValueError(f"Unexpected output shape: {output.shape}")
+
         grad = torch.autograd.grad(outputs=scalar, inputs=s_input)[0]
         grads.append(grad)
     avg_grads = torch.stack(grads).mean(dim=0)
@@ -90,9 +105,11 @@ def process_subject(args_tuple):
     affine = nib.load(str(affine_path)).affine
 
     testset = model.data_module.test_dataset
+    # Use dataset.data to find subject indices without loading actual fMRI data
+    # data format: (i, subject_name, subject_path, start_frame, sequence_length, num_frames, target, sex)
     subj_indices = [
-        idx for idx, s in enumerate(testset)
-        if (s["subject_name"] if isinstance(s["subject_name"], str) else s["subject_name"][0]) == subject
+        idx for idx, data_tuple in enumerate(testset.data)
+        if str(data_tuple[1]) == subject
     ]
     if not subj_indices:
         print(f"❌ No matching data for subject: {subject}", flush=True)
@@ -138,17 +155,17 @@ def process_subject(args_tuple):
             print(f"[IG OK] {subject} - {emotion_label} TR{TR_index:03d} (baseline=zeros)", flush=True)
 
         instance_count += 1
-        if instance_count >= 5:  # 처음 5개만 처리 (테스트용)
-            break
+        # Process all sequences (not just first 5)
 
     print(f"✅ Total time for {subject}: {time.time() - overall_start:.2f}s")
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--run_id', type=str, default='opr6oq97')
-    parser.add_argument('--subject', type=str, required=True, help="Subject name to process")
+    parser.add_argument('--subject', type=str, default=None, help="Subject name to process (optional, will auto-select from test set if not provided)")
     parser.add_argument('--n_jobs', type=int, default=1)
     parser.add_argument('--project_root', type=str, default='/scratch/connectome/kimbo/SwiFT-IO-4-v9/SwiFT-IO')
+    parser.add_argument('--dry-run', action='store_true', help="Only list test subjects without processing")
     args = parser.parse_args()
 
     project_root = Path(args.project_root)
@@ -164,16 +181,55 @@ if __name__ == '__main__':
     print(f"✅ Loaded checkpoint: {ckpt_path.name}")
     print(f"   seq_len={args_model_dict.get('sequence_length')}, offset={args_model_dict.get('input_offset')}")
 
+    # Initialize model and data to get test set subjects
+    print("🚀 Initializing model & data to find test subjects...")
+    init_model_and_data(str(ckpt_path), args_model_dict, project_root)
+
+    # Get unique test subjects from test dataset (faster method using dataset's data list)
+    testset = data_module.test_dataset
+    if hasattr(testset, 'data'):
+        # Extract unique subjects from data list
+        # data format: (i, subject_name, subject_path, start_frame, sequence_length, num_frames, target, sex)
+        test_subjects = sorted(list(set([str(x[1]) for x in testset.data])))
+        print(f"✅ Extracted {len(test_subjects)} subjects from dataset.data")
+    else:
+        print("❌ Error: dataset.data attribute not found")
+        sys.exit(1)
+
+    print(f"\n📊 Found {len(test_subjects)} unique subjects in test set")
+    print(f"   First 10 subjects: {test_subjects[:10]}")
+
+    # If dry-run, just print subjects and exit
+    if args.dry_run:
+        print("\n" + "="*50)
+        print("DRY RUN MODE - Test Subjects Only")
+        print("="*50)
+        for i, subj in enumerate(test_subjects, 1):
+            print(f"  {i:3d}. {subj}")
+        print("="*50)
+        print(f"\nTotal: {len(test_subjects)} subjects in test set")
+        sys.exit(0)
+
+    # Select subject
+    if args.subject is None:
+        selected_subject = test_subjects[0]
+        print(f"\n✅ Auto-selected first test subject: {selected_subject}")
+    else:
+        if args.subject in test_subjects:
+            selected_subject = args.subject
+            print(f"\n✅ Using specified subject: {selected_subject}")
+        else:
+            print(f"\n❌ Error: Subject '{args.subject}' not found in test set!")
+            print(f"   Available subjects: {test_subjects[:20]}...")
+            sys.exit(1)
+
     # Use reference affine
     affine_path = project_root / "analysis/4_IGmap/reference_affine_MNI152_2mm.nii.gz"
     if not affine_path.exists():
         print("⚠ Reference affine not found, creating from data...")
         affine_path = project_root / "igmap/sub-NDARVN715MJ9_task-movieDM_space-MNI152NLin2009cAsym_desc-brain_mask.nii.gz"
 
-    subject_list = [args.subject]
-
-    with Pool(processes=args.n_jobs, initializer=init_model_and_data,
-              initargs=(str(ckpt_path), args_model_dict, project_root)) as pool:
-        pool.map(process_subject, [(subj, args, affine_path, project_root) for subj in subject_list])
+    # Process the selected subject
+    process_subject((selected_subject, args, affine_path, project_root))
 
     print("✅ All processing complete!")
