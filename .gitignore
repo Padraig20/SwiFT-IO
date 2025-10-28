@@ -29,3 +29,17 @@ analysis/results
 data_behavior
 
 /scratch/connectome/kimbo/SwiFT-IO-4-v9/SwiFT-IO/lightning_logs
+
+# SLURM job output files
+*.out
+*.err
+
+# Large neuroimaging files
+*.nii.gz
+*.nii
+
+# WandB logs (too large)
+wandb/
+
+# Mock data for testing
+mock_data_for_local/

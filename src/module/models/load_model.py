@@ -95,7 +95,8 @@ def load_model(model_name, hparams=None):
             num_output_queries=t_orig,
             #num_output_query_channels=hparams.num_output_query_channels,
             num_classes=num_classes,
-            num_targets=hparams.num_targets
+            num_targets=hparams.num_targets,
+            downstream_task_type=hparams.downstream_task_type
         )
     elif model_name == "lstm_encoder":
         net = LSTMEncoder(

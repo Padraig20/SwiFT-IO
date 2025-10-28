@@ -25,7 +25,9 @@ class SeriesDecoder(nn.Module):
                  num_output_query_channels: int = 256,
                  num_classes: int = 100,
                  # Series specific
-                 num_targets: int = 7 # e.g. num of emotions
+                 num_targets: int = 7, # e.g. num of emotions
+                 # Task type
+                 downstream_task_type: str = 'regression'
                  ):
         super().__init__()
 
@@ -39,7 +41,8 @@ class SeriesDecoder(nn.Module):
         output_adapter = SeriesClassificationOutputAdapter(
             num_classes=num_classes,
             num_output_query_channels=num_output_query_channels,
-            num_targets=num_targets
+            num_targets=num_targets,
+            downstream_task_type=downstream_task_type
         )
 
         self.decoder = PerceiverDecoder(

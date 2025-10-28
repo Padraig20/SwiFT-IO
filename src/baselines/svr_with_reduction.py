@@ -20,10 +20,10 @@ import torch
 import pickle
 import json
 
-from sklearn.svm import SVC
+from sklearn.svm import SVR, SVC
 from sklearn.preprocessing import StandardScaler
 from sklearn.decomposition import PCA, IncrementalPCA
-from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score, accuracy_score
+from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score, accuracy_score, f1_score, precision_score, recall_score
 from scipy.stats import pearsonr
 from joblib import Parallel, delayed
 import multiprocessing
@@ -61,7 +61,8 @@ class SVRWithReduction:
                  epsilon: float = 0.1,
                  standardize: bool = True,
                  use_wandb: bool = False,
-                 emotion_names: List[str] = None):
+                 emotion_names: List[str] = None,
+                 task_type: str = 'regression'):
         """
         Args:
             num_emotions: Number of emotions to predict
@@ -75,13 +76,12 @@ class SVRWithReduction:
             roi_timeseries_path: Path to precomputed ROI timeseries CSVs
             kernel: SVR kernel type ('linear', 'rbf', 'poly')
             C: Regularization parameter
-            epsilon: Epsilon in epsilon-SVR
+            epsilon: Epsilon in epsilon-SVR (only for regression)
             standardize: Whether to standardize features
             use_wandb: Whether to log to wandb
             emotion_names: List of emotion names for better logging
+            task_type: 'regression' or 'classification'
         """
-        from sklearn.svm import SVR
-
         self.num_emotions = num_emotions
         self.sequence_length = sequence_length
         self.reduction_method = reduction_method
@@ -94,10 +94,16 @@ class SVRWithReduction:
         self.standardize = standardize
         self.use_wandb = use_wandb and WANDB_AVAILABLE
         self.emotion_names = emotion_names or [f'emotion_{i}' for i in range(num_emotions)]
+        self.task_type = task_type
 
-        # Create models: one SVR per emotion (since this is regression)
-        # Note: SVR itself doesn't support n_jobs, but we can use joblib for parallel training
-        self.models = [
+        # Create models: one SVR/SVC per emotion
+        if task_type == 'classification':
+            self.models = [
+                SVC(kernel=kernel, C=C, cache_size=1000, verbose=False, probability=True)
+                for _ in range(num_emotions)
+            ]
+        else:  # regression
+            self.models = [
             SVR(kernel=kernel, C=C, epsilon=epsilon, cache_size=1000, verbose=False)
             for _ in range(num_emotions)
         ]
@@ -419,25 +425,41 @@ class SVRWithReduction:
             scaler = None
             X_train_scaled = X_train
 
-        # Fit SVR
+        # Fit SVR/SVC
         self.models[e].fit(X_train_scaled, y_train)
 
         # Training predictions
         y_pred = self.models[e].predict(X_train_scaled)
 
         # Metrics
-        mse = mean_squared_error(y_train, y_pred)
-        mae = mean_absolute_error(y_train, y_pred)
-        r2 = r2_score(y_train, y_pred)
+        if self.task_type == 'classification':
+            acc = accuracy_score(y_train, y_pred)
+            f1 = f1_score(y_train, y_pred, average='weighted', zero_division=0)
+            precision = precision_score(y_train, y_pred, average='weighted', zero_division=0)
+            recall = recall_score(y_train, y_pred, average='weighted', zero_division=0)
 
-        return {
-            'emotion_idx': e,
-            'model': self.models[e],
-            'scaler': scaler,
-            'mse': mse,
-            'mae': mae,
-            'r2': r2
-        }
+            return {
+                'emotion_idx': e,
+                'model': self.models[e],
+                'scaler': scaler,
+                'acc': acc,
+                'f1': f1,
+                'precision': precision,
+                'recall': recall
+            }
+        else:  # regression
+            mse = mean_squared_error(y_train, y_pred)
+            mae = mean_absolute_error(y_train, y_pred)
+            r2 = r2_score(y_train, y_pred)
+
+            return {
+                'emotion_idx': e,
+                'model': self.models[e],
+                'scaler': scaler,
+                'mse': mse,
+                'mae': mae,
+                'r2': r2
+            }
 
     def prepare_data_from_dataloader(self, dataloader, mode: str = 'train') -> Tuple[np.ndarray, np.ndarray]:
         """
@@ -614,42 +636,83 @@ class SVRWithReduction:
             if self.standardize:
                 self.scalers[e] = result['scaler']
 
-            mse = result['mse']
-            mae = result['mae']
-            r2 = result['r2']
+            if self.task_type == 'classification':
+                acc = result['acc']
+                f1 = result['f1']
+                precision = result['precision']
+                recall = result['recall']
 
-            train_metrics[f'train_mse_{e}'] = mse
-            train_metrics[f'train_mae_{e}'] = mae
-            train_metrics[f'train_r2_{e}'] = r2
+                train_metrics[f'train_acc_{e}'] = acc
+                train_metrics[f'train_f1_{e}'] = f1
+                train_metrics[f'train_precision_{e}'] = precision
+                train_metrics[f'train_recall_{e}'] = recall
 
-            print(f"  Emotion {e} ({self.emotion_names[e]}): MSE={mse:.4f}, MAE={mae:.4f}, R2={r2:.4f}")
+                print(f"  Emotion {e} ({self.emotion_names[e]}): Acc={acc:.4f}, F1={f1:.4f}, Precision={precision:.4f}, Recall={recall:.4f}")
 
-            # Log to wandb
-            if self.use_wandb:
-                wandb.log({
-                    f'train/{self.emotion_names[e]}/mse': mse,
-                    f'train/{self.emotion_names[e]}/mae': mae,
-                    f'train/{self.emotion_names[e]}/r2': r2,
-                    'train/emotion_progress': (e + 1) / self.num_emotions
-                })
+                # Log to wandb
+                if self.use_wandb:
+                    wandb.log({
+                        f'train/{self.emotion_names[e]}/acc': acc,
+                        f'train/{self.emotion_names[e]}/f1': f1,
+                        f'train/{self.emotion_names[e]}/precision': precision,
+                        f'train/{self.emotion_names[e]}/recall': recall,
+                        'train/emotion_progress': (e + 1) / self.num_emotions
+                    })
 
-            # Save checkpoint after each emotion
-            if output_dir:
-                emotion_checkpoint_path = os.path.join(output_dir, f'svr_emotion_{e}_checkpoint.pkl')
-                checkpoint = {
-                    'emotion_idx': e,
-                    'model': self.models[e],
-                    'scaler': self.scalers[e] if self.standardize else None,
-                    'metrics': {
-                        'mse': mse,
-                        'mae': mae,
-                        'r2': r2
+                # Save checkpoint after each emotion
+                if output_dir:
+                    emotion_checkpoint_path = os.path.join(output_dir, f'svc_emotion_{e}_checkpoint.pkl')
+                    checkpoint = {
+                        'emotion_idx': e,
+                        'model': self.models[e],
+                        'scaler': self.scalers[e] if self.standardize else None,
+                        'metrics': {
+                            'acc': acc,
+                            'f1': f1,
+                            'precision': precision,
+                            'recall': recall
+                        }
                     }
-                }
-                with open(emotion_checkpoint_path, 'wb') as f:
-                    pickle.dump(checkpoint, f)
+                    with open(emotion_checkpoint_path, 'wb') as f:
+                        pickle.dump(checkpoint, f)
+            else:  # regression
+                mse = result['mse']
+                mae = result['mae']
+                r2 = result['r2']
 
-                # Also save intermediate metrics
+                train_metrics[f'train_mse_{e}'] = mse
+                train_metrics[f'train_mae_{e}'] = mae
+                train_metrics[f'train_r2_{e}'] = r2
+
+                print(f"  Emotion {e} ({self.emotion_names[e]}): MSE={mse:.4f}, MAE={mae:.4f}, R2={r2:.4f}")
+
+                # Log to wandb
+                if self.use_wandb:
+                    wandb.log({
+                        f'train/{self.emotion_names[e]}/mse': mse,
+                        f'train/{self.emotion_names[e]}/mae': mae,
+                        f'train/{self.emotion_names[e]}/r2': r2,
+                        'train/emotion_progress': (e + 1) / self.num_emotions
+                    })
+
+                # Save checkpoint after each emotion
+                if output_dir:
+                    emotion_checkpoint_path = os.path.join(output_dir, f'svr_emotion_{e}_checkpoint.pkl')
+                    checkpoint = {
+                        'emotion_idx': e,
+                        'model': self.models[e],
+                        'scaler': self.scalers[e] if self.standardize else None,
+                        'metrics': {
+                            'mse': mse,
+                            'mae': mae,
+                            'r2': r2
+                        }
+                    }
+                    with open(emotion_checkpoint_path, 'wb') as f:
+                        pickle.dump(checkpoint, f)
+
+            # Also save intermediate metrics
+            if output_dir:
                 intermediate_metrics_path = os.path.join(output_dir, f'train_metrics_up_to_emotion_{e}.json')
                 current_metrics = {k: v for k, v in train_metrics.items()}
                 with open(intermediate_metrics_path, 'w') as f:
@@ -658,24 +721,49 @@ class SVRWithReduction:
         self.fitted = True
 
         # Overall metrics
-        train_metrics['train_mse'] = np.mean([train_metrics[f'train_mse_{e}']
-                                               for e in range(self.num_emotions)])
-        train_metrics['train_mae'] = np.mean([train_metrics[f'train_mae_{e}']
-                                               for e in range(self.num_emotions)])
-        train_metrics['train_r2'] = np.mean([train_metrics[f'train_r2_{e}']
-                                              for e in range(self.num_emotions)])
+        if self.task_type == 'classification':
+            train_metrics['train_acc'] = np.mean([train_metrics[f'train_acc_{e}']
+                                                   for e in range(self.num_emotions)])
+            train_metrics['train_f1'] = np.mean([train_metrics[f'train_f1_{e}']
+                                                  for e in range(self.num_emotions)])
+            train_metrics['train_precision'] = np.mean([train_metrics[f'train_precision_{e}']
+                                                         for e in range(self.num_emotions)])
+            train_metrics['train_recall'] = np.mean([train_metrics[f'train_recall_{e}']
+                                                      for e in range(self.num_emotions)])
 
-        print(f"\nOverall Training - MSE: {train_metrics['train_mse']:.4f}, "
-              f"MAE: {train_metrics['train_mae']:.4f}, R2: {train_metrics['train_r2']:.4f}")
-        print("="*80)
+            print(f"\nOverall Training - Acc: {train_metrics['train_acc']:.4f}, "
+                  f"F1: {train_metrics['train_f1']:.4f}, "
+                  f"Precision: {train_metrics['train_precision']:.4f}, "
+                  f"Recall: {train_metrics['train_recall']:.4f}")
+            print("="*80)
 
-        # Log overall training metrics to wandb
-        if self.use_wandb:
-            wandb.log({
-                'train/overall_mse': train_metrics['train_mse'],
-                'train/overall_mae': train_metrics['train_mae'],
-                'train/overall_r2': train_metrics['train_r2']
-            })
+            # Log overall training metrics to wandb
+            if self.use_wandb:
+                wandb.log({
+                    'train/overall_acc': train_metrics['train_acc'],
+                    'train/overall_f1': train_metrics['train_f1'],
+                    'train/overall_precision': train_metrics['train_precision'],
+                    'train/overall_recall': train_metrics['train_recall']
+                })
+        else:  # regression
+            train_metrics['train_mse'] = np.mean([train_metrics[f'train_mse_{e}']
+                                                   for e in range(self.num_emotions)])
+            train_metrics['train_mae'] = np.mean([train_metrics[f'train_mae_{e}']
+                                                   for e in range(self.num_emotions)])
+            train_metrics['train_r2'] = np.mean([train_metrics[f'train_r2_{e}']
+                                                  for e in range(self.num_emotions)])
+
+            print(f"\nOverall Training - MSE: {train_metrics['train_mse']:.4f}, "
+                  f"MAE: {train_metrics['train_mae']:.4f}, R2: {train_metrics['train_r2']:.4f}")
+            print("="*80)
+
+            # Log overall training metrics to wandb
+            if self.use_wandb:
+                wandb.log({
+                    'train/overall_mse': train_metrics['train_mse'],
+                    'train/overall_mae': train_metrics['train_mae'],
+                    'train/overall_r2': train_metrics['train_r2']
+                })
 
         return train_metrics
 
@@ -732,58 +820,108 @@ class SVRWithReduction:
         # Compute metrics
         metrics = {}
 
-        # Overall metrics
-        mse_overall = mean_squared_error(Y_eval.flatten(), Y_pred.flatten())
-        mae_overall = mean_absolute_error(Y_eval.flatten(), Y_pred.flatten())
-        r2_overall = r2_score(Y_eval.flatten(), Y_pred.flatten())
+        if self.task_type == 'classification':
+            # Overall metrics
+            acc_overall = accuracy_score(Y_eval.flatten(), Y_pred.flatten())
+            f1_overall = f1_score(Y_eval.flatten(), Y_pred.flatten(), average='weighted', zero_division=0)
+            precision_overall = precision_score(Y_eval.flatten(), Y_pred.flatten(), average='weighted', zero_division=0)
+            recall_overall = recall_score(Y_eval.flatten(), Y_pred.flatten(), average='weighted', zero_division=0)
 
-        metrics[f'{mode}_mse'] = mse_overall
-        metrics[f'{mode}_mae'] = mae_overall
-        metrics[f'{mode}_r2'] = r2_overall
+            metrics[f'{mode}_acc'] = acc_overall
+            metrics[f'{mode}_f1'] = f1_overall
+            metrics[f'{mode}_precision'] = precision_overall
+            metrics[f'{mode}_recall'] = recall_overall
 
-        # Per-emotion metrics
-        for e in range(self.num_emotions):
-            y_true_e = Y_eval[:, e]
-            y_pred_e = Y_pred[:, e]
+            # Per-emotion metrics
+            for e in range(self.num_emotions):
+                y_true_e = Y_eval[:, e]
+                y_pred_e = Y_pred[:, e]
 
-            mse_e = mean_squared_error(y_true_e, y_pred_e)
-            mae_e = mean_absolute_error(y_true_e, y_pred_e)
-            r2_e = r2_score(y_true_e, y_pred_e)
+                acc_e = accuracy_score(y_true_e, y_pred_e)
+                f1_e = f1_score(y_true_e, y_pred_e, average='weighted', zero_division=0)
+                precision_e = precision_score(y_true_e, y_pred_e, average='weighted', zero_division=0)
+                recall_e = recall_score(y_true_e, y_pred_e, average='weighted', zero_division=0)
 
-            # Pearson correlation
-            if len(y_true_e) > 1:
-                corr_e, _ = pearsonr(y_true_e, y_pred_e)
-            else:
-                corr_e = 0.0
+                metrics[f'{mode}_acc_{e}'] = acc_e
+                metrics[f'{mode}_f1_{e}'] = f1_e
+                metrics[f'{mode}_precision_{e}'] = precision_e
+                metrics[f'{mode}_recall_{e}'] = recall_e
 
-            metrics[f'{mode}_mse_{e}'] = mse_e
-            metrics[f'{mode}_mae_{e}'] = mae_e
-            metrics[f'{mode}_r2_{e}'] = r2_e
-            metrics[f'{mode}_corrcoef_{e}'] = corr_e
+                print(f"  Emotion {e} ({self.emotion_names[e]}): Acc={acc_e:.4f}, F1={f1_e:.4f}, "
+                      f"Precision={precision_e:.4f}, Recall={recall_e:.4f}")
 
-            print(f"  Emotion {e} ({self.emotion_names[e]}): MSE={mse_e:.4f}, MAE={mae_e:.4f}, "
-                  f"R2={r2_e:.4f}, Corr={corr_e:.4f}")
+                # Log per-emotion metrics to wandb
+                if self.use_wandb:
+                    wandb.log({
+                        f'{mode}/{self.emotion_names[e]}/acc': acc_e,
+                        f'{mode}/{self.emotion_names[e]}/f1': f1_e,
+                        f'{mode}/{self.emotion_names[e]}/precision': precision_e,
+                        f'{mode}/{self.emotion_names[e]}/recall': recall_e
+                    })
 
-            # Log per-emotion metrics to wandb
-            if self.use_wandb:
-                wandb.log({
-                    f'{mode}/{self.emotion_names[e]}/mse': mse_e,
-                    f'{mode}/{self.emotion_names[e]}/mae': mae_e,
-                    f'{mode}/{self.emotion_names[e]}/r2': r2_e,
-                    f'{mode}/{self.emotion_names[e]}/corr': corr_e
-                })
+            print(f"\nOverall {mode} - Acc: {acc_overall:.4f}, F1: {f1_overall:.4f}, "
+                  f"Precision: {precision_overall:.4f}, Recall: {recall_overall:.4f}")
+        else:  # regression
+            # Overall metrics
+            mse_overall = mean_squared_error(Y_eval.flatten(), Y_pred.flatten())
+            mae_overall = mean_absolute_error(Y_eval.flatten(), Y_pred.flatten())
+            r2_overall = r2_score(Y_eval.flatten(), Y_pred.flatten())
 
-        print(f"\nOverall {mode} - MSE: {mse_overall:.4f}, MAE: {mae_overall:.4f}, "
-              f"R2: {r2_overall:.4f}")
+            metrics[f'{mode}_mse'] = mse_overall
+            metrics[f'{mode}_mae'] = mae_overall
+            metrics[f'{mode}_r2'] = r2_overall
+
+            # Per-emotion metrics
+            for e in range(self.num_emotions):
+                y_true_e = Y_eval[:, e]
+                y_pred_e = Y_pred[:, e]
+
+                mse_e = mean_squared_error(y_true_e, y_pred_e)
+                mae_e = mean_absolute_error(y_true_e, y_pred_e)
+                r2_e = r2_score(y_true_e, y_pred_e)
+
+                # Pearson correlation
+                if len(y_true_e) > 1:
+                    corr_e, _ = pearsonr(y_true_e, y_pred_e)
+                else:
+                    corr_e = 0.0
+
+                metrics[f'{mode}_mse_{e}'] = mse_e
+                metrics[f'{mode}_mae_{e}'] = mae_e
+                metrics[f'{mode}_r2_{e}'] = r2_e
+                metrics[f'{mode}_corrcoef_{e}'] = corr_e
+
+                print(f"  Emotion {e} ({self.emotion_names[e]}): MSE={mse_e:.4f}, MAE={mae_e:.4f}, "
+                      f"R2={r2_e:.4f}, Corr={corr_e:.4f}")
+
+                # Log per-emotion metrics to wandb
+                if self.use_wandb:
+                    wandb.log({
+                        f'{mode}/{self.emotion_names[e]}/mse': mse_e,
+                        f'{mode}/{self.emotion_names[e]}/mae': mae_e,
+                        f'{mode}/{self.emotion_names[e]}/r2': r2_e,
+                        f'{mode}/{self.emotion_names[e]}/corr': corr_e
+                    })
+
+            print(f"\nOverall {mode} - MSE: {mse_overall:.4f}, MAE: {mae_overall:.4f}, "
+                  f"R2: {r2_overall:.4f}")
         print("="*80)
 
         # Log overall metrics to wandb
         if self.use_wandb:
-            wandb.log({
-                f'{mode}/overall_mse': mse_overall,
-                f'{mode}/overall_mae': mae_overall,
-                f'{mode}/overall_r2': r2_overall
-            })
+            if self.task_type == 'classification':
+                wandb.log({
+                    f'{mode}/overall_acc': acc_overall,
+                    f'{mode}/overall_f1': f1_overall,
+                    f'{mode}/overall_precision': precision_overall,
+                    f'{mode}/overall_recall': recall_overall
+                })
+            else:
+                wandb.log({
+                    f'{mode}/overall_mse': mse_overall,
+                    f'{mode}/overall_mae': mae_overall,
+                    f'{mode}/overall_r2': r2_overall
+                })
 
         return metrics
 

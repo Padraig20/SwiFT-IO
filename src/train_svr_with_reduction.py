@@ -105,9 +105,12 @@ def main():
     parser.add_argument("--C", type=float, default=1.0,
                        help="SVR regularization parameter")
     parser.add_argument("--epsilon", type=float, default=0.1,
-                       help="Epsilon in epsilon-SVR")
+                       help="Epsilon in epsilon-SVR (only for regression)")
     parser.add_argument("--standardize", action='store_true', default=True,
                        help="Standardize features")
+    parser.add_argument("--task_type", type=str, default="regression",
+                       choices=['regression', 'classification'],
+                       help="Task type: regression or classification")
 
     # Data loading arguments
     parser.add_argument("--batch_size", type=int, default=4,
@@ -154,6 +157,7 @@ def main():
     print(f"SVR with Dimensionality Reduction Training ({args.reduction_method} method)")
     print("="*80)
     print(f"Task: {args.downstream_task}")
+    print(f"Task type: {args.task_type}")
     print(f"Input type: {args.input_type}")
     print(f"Split seed: {args.dataset_split_seed}")
     print(f"Sequence length: {args.sequence_length}")
@@ -167,7 +171,10 @@ def main():
         print(f"Time-averaged (single static pattern)")
         print(f"Feature dim: 96*96*96 = {96*96*96:,} voxels")
     print(f"SVR kernel: {args.kernel}")
-    print(f"C: {args.C}, epsilon: {args.epsilon}")
+    if args.task_type == 'regression':
+        print(f"C: {args.C}, epsilon: {args.epsilon}")
+    else:
+        print(f"C: {args.C}")
     print("="*80)
 
     # ===== 1. Setup data module (same as SwiFT-IO) =====
@@ -235,7 +242,8 @@ def main():
         epsilon=args.epsilon,
         standardize=args.standardize,
         use_wandb=args.use_wandb,
-        emotion_names=emotion_names
+        emotion_names=emotion_names,
+        task_type=args.task_type
     )
 
     # ===== 3. Train SVR =====

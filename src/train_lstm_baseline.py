@@ -101,7 +101,11 @@ def cli_main():
     parser = Dataset.add_data_specific_args(parser)
 
     # Set model and decoder defaults for LSTM after all args are added
-    parser.set_defaults(model="lstm_encoder", decoder="lstm_regression_head")
+    # Note: For classification, decoder will be set based on downstream_task_type
+    if temp_args.downstream_task_type == "classification":
+        parser.set_defaults(model="lstm_encoder", decoder="lstm_classification_head")
+    else:
+        parser.set_defaults(model="lstm_encoder", decoder="lstm_regression_head")
 
     _, _ = parser.parse_known_args()
     parser = pl.Trainer.add_argparse_args(parser)

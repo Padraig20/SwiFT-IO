@@ -21,9 +21,9 @@ import torch
 import pickle
 import json
 
-from sklearn.svm import SVR
+from sklearn.svm import SVR, SVC
 from sklearn.preprocessing import StandardScaler
-from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
+from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score, accuracy_score, f1_score, precision_score, recall_score
 from scipy.stats import pearsonr
 from nilearn.maskers import NiftiMasker
 import nibabel as nib
@@ -51,17 +51,19 @@ class SVRBaseline:
                  epsilon: float = 0.1,
                  standardize: bool = True,
                  use_masking: bool = False,
-                 cache_dir: str = None):
+                 cache_dir: str = None,
+                 task_type: str = 'regression'):
         """
         Args:
             num_emotions: Number of emotions to predict
             sequence_length: Length of fMRI sequence (default: 30)
             kernel: SVR kernel type ('linear', 'rbf', 'poly')
             C: Regularization parameter
-            epsilon: Epsilon in epsilon-SVR
+            epsilon: Epsilon in epsilon-SVR (only for regression)
             standardize: Whether to standardize features
             use_masking: Whether to use brain masking (requires mask file)
             cache_dir: Directory to cache processed data
+            task_type: 'regression' or 'classification'
         """
         self.num_emotions = num_emotions
         self.sequence_length = sequence_length
@@ -71,12 +73,19 @@ class SVRBaseline:
         self.standardize = standardize
         self.use_masking = use_masking
         self.cache_dir = cache_dir
+        self.task_type = task_type
 
-        # Create models: one SVR per emotion
-        self.models = [
-            SVR(kernel=kernel, C=C, epsilon=epsilon, cache_size=1000, verbose=False)
-            for _ in range(num_emotions)
-        ]
+        # Create models: one SVR/SVC per emotion
+        if task_type == 'classification':
+            self.models = [
+                SVC(kernel=kernel, C=C, cache_size=1000, verbose=False, probability=True)
+                for _ in range(num_emotions)
+            ]
+        else:  # regression
+            self.models = [
+                SVR(kernel=kernel, C=C, epsilon=epsilon, cache_size=1000, verbose=False)
+                for _ in range(num_emotions)
+            ]
 
         # Scalers for feature standardization (one per emotion)
         self.scalers = [StandardScaler() for _ in range(num_emotions)] if standardize else None
@@ -256,28 +265,56 @@ class SVRBaseline:
             y_pred = self.models[e].predict(X_train_scaled)
 
             # Metrics
-            mse = mean_squared_error(y_train, y_pred)
-            mae = mean_absolute_error(y_train, y_pred)
-            r2 = r2_score(y_train, y_pred)
+            if self.task_type == 'classification':
+                acc = accuracy_score(y_train, y_pred)
+                f1 = f1_score(y_train, y_pred, average='weighted', zero_division=0)
+                precision = precision_score(y_train, y_pred, average='weighted', zero_division=0)
+                recall = recall_score(y_train, y_pred, average='weighted', zero_division=0)
 
-            train_metrics[f'train_mse_{e}'] = mse
-            train_metrics[f'train_mae_{e}'] = mae
-            train_metrics[f'train_r2_{e}'] = r2
+                train_metrics[f'train_acc_{e}'] = acc
+                train_metrics[f'train_f1_{e}'] = f1
+                train_metrics[f'train_precision_{e}'] = precision
+                train_metrics[f'train_recall_{e}'] = recall
 
-            print(f"  Emotion {e}: MSE={mse:.4f}, MAE={mae:.4f}, R2={r2:.4f}")
+                print(f"  Emotion {e}: Acc={acc:.4f}, F1={f1:.4f}, Precision={precision:.4f}, Recall={recall:.4f}")
+            else:  # regression
+                mse = mean_squared_error(y_train, y_pred)
+                mae = mean_absolute_error(y_train, y_pred)
+                r2 = r2_score(y_train, y_pred)
+
+                train_metrics[f'train_mse_{e}'] = mse
+                train_metrics[f'train_mae_{e}'] = mae
+                train_metrics[f'train_r2_{e}'] = r2
+
+                print(f"  Emotion {e}: MSE={mse:.4f}, MAE={mae:.4f}, R2={r2:.4f}")
 
         self.fitted = True
 
         # Overall metrics
-        train_metrics['train_mse'] = np.mean([train_metrics[f'train_mse_{e}']
-                                               for e in range(self.num_emotions)])
-        train_metrics['train_mae'] = np.mean([train_metrics[f'train_mae_{e}']
-                                               for e in range(self.num_emotions)])
-        train_metrics['train_r2'] = np.mean([train_metrics[f'train_r2_{e}']
-                                              for e in range(self.num_emotions)])
+        if self.task_type == 'classification':
+            train_metrics['train_acc'] = np.mean([train_metrics[f'train_acc_{e}']
+                                                   for e in range(self.num_emotions)])
+            train_metrics['train_f1'] = np.mean([train_metrics[f'train_f1_{e}']
+                                                  for e in range(self.num_emotions)])
+            train_metrics['train_precision'] = np.mean([train_metrics[f'train_precision_{e}']
+                                                         for e in range(self.num_emotions)])
+            train_metrics['train_recall'] = np.mean([train_metrics[f'train_recall_{e}']
+                                                      for e in range(self.num_emotions)])
 
-        print(f"\nOverall Training - MSE: {train_metrics['train_mse']:.4f}, "
-              f"MAE: {train_metrics['train_mae']:.4f}, R2: {train_metrics['train_r2']:.4f}")
+            print(f"\nOverall Training - Acc: {train_metrics['train_acc']:.4f}, "
+                  f"F1: {train_metrics['train_f1']:.4f}, "
+                  f"Precision: {train_metrics['train_precision']:.4f}, "
+                  f"Recall: {train_metrics['train_recall']:.4f}")
+        else:  # regression
+            train_metrics['train_mse'] = np.mean([train_metrics[f'train_mse_{e}']
+                                                   for e in range(self.num_emotions)])
+            train_metrics['train_mae'] = np.mean([train_metrics[f'train_mae_{e}']
+                                                   for e in range(self.num_emotions)])
+            train_metrics['train_r2'] = np.mean([train_metrics[f'train_r2_{e}']
+                                                  for e in range(self.num_emotions)])
+
+            print(f"\nOverall Training - MSE: {train_metrics['train_mse']:.4f}, "
+                  f"MAE: {train_metrics['train_mae']:.4f}, R2: {train_metrics['train_r2']:.4f}")
         print("="*80)
 
         return train_metrics
@@ -320,40 +357,73 @@ class SVRBaseline:
         # Compute metrics
         metrics = {}
 
-        # Overall metrics
-        mse_overall = mean_squared_error(Y_eval.flatten(), Y_pred.flatten())
-        mae_overall = mean_absolute_error(Y_eval.flatten(), Y_pred.flatten())
-        r2_overall = r2_score(Y_eval.flatten(), Y_pred.flatten())
+        if self.task_type == 'classification':
+            # Overall metrics
+            acc_overall = accuracy_score(Y_eval.flatten(), Y_pred.flatten())
+            f1_overall = f1_score(Y_eval.flatten(), Y_pred.flatten(), average='weighted', zero_division=0)
+            precision_overall = precision_score(Y_eval.flatten(), Y_pred.flatten(), average='weighted', zero_division=0)
+            recall_overall = recall_score(Y_eval.flatten(), Y_pred.flatten(), average='weighted', zero_division=0)
 
-        metrics[f'{mode}_mse'] = mse_overall
-        metrics[f'{mode}_mae'] = mae_overall
-        metrics[f'{mode}_r2'] = r2_overall
+            metrics[f'{mode}_acc'] = acc_overall
+            metrics[f'{mode}_f1'] = f1_overall
+            metrics[f'{mode}_precision'] = precision_overall
+            metrics[f'{mode}_recall'] = recall_overall
 
-        # Per-emotion metrics
-        for e in range(self.num_emotions):
-            y_true_e = Y_eval[:, e]
-            y_pred_e = Y_pred[:, e]
+            # Per-emotion metrics
+            for e in range(self.num_emotions):
+                y_true_e = Y_eval[:, e]
+                y_pred_e = Y_pred[:, e]
 
-            mse_e = mean_squared_error(y_true_e, y_pred_e)
-            mae_e = mean_absolute_error(y_true_e, y_pred_e)
-            r2_e = r2_score(y_true_e, y_pred_e)
+                acc_e = accuracy_score(y_true_e, y_pred_e)
+                f1_e = f1_score(y_true_e, y_pred_e, average='weighted', zero_division=0)
+                precision_e = precision_score(y_true_e, y_pred_e, average='weighted', zero_division=0)
+                recall_e = recall_score(y_true_e, y_pred_e, average='weighted', zero_division=0)
 
-            # Pearson correlation
-            if len(y_true_e) > 1:
-                corr_e, _ = pearsonr(y_true_e, y_pred_e)
-            else:
-                corr_e = 0.0
+                metrics[f'{mode}_acc_{e}'] = acc_e
+                metrics[f'{mode}_f1_{e}'] = f1_e
+                metrics[f'{mode}_precision_{e}'] = precision_e
+                metrics[f'{mode}_recall_{e}'] = recall_e
 
-            metrics[f'{mode}_mse_{e}'] = mse_e
-            metrics[f'{mode}_mae_{e}'] = mae_e
-            metrics[f'{mode}_r2_{e}'] = r2_e
-            metrics[f'{mode}_corrcoef_{e}'] = corr_e
+                print(f"  Emotion {e}: Acc={acc_e:.4f}, F1={f1_e:.4f}, "
+                      f"Precision={precision_e:.4f}, Recall={recall_e:.4f}")
 
-            print(f"  Emotion {e}: MSE={mse_e:.4f}, MAE={mae_e:.4f}, "
-                  f"R2={r2_e:.4f}, Corr={corr_e:.4f}")
+            print(f"\nOverall {mode} - Acc: {acc_overall:.4f}, F1: {f1_overall:.4f}, "
+                  f"Precision: {precision_overall:.4f}, Recall: {recall_overall:.4f}")
+        else:  # regression
+            # Overall metrics
+            mse_overall = mean_squared_error(Y_eval.flatten(), Y_pred.flatten())
+            mae_overall = mean_absolute_error(Y_eval.flatten(), Y_pred.flatten())
+            r2_overall = r2_score(Y_eval.flatten(), Y_pred.flatten())
 
-        print(f"\nOverall {mode} - MSE: {mse_overall:.4f}, MAE: {mae_overall:.4f}, "
-              f"R2: {r2_overall:.4f}")
+            metrics[f'{mode}_mse'] = mse_overall
+            metrics[f'{mode}_mae'] = mae_overall
+            metrics[f'{mode}_r2'] = r2_overall
+
+            # Per-emotion metrics
+            for e in range(self.num_emotions):
+                y_true_e = Y_eval[:, e]
+                y_pred_e = Y_pred[:, e]
+
+                mse_e = mean_squared_error(y_true_e, y_pred_e)
+                mae_e = mean_absolute_error(y_true_e, y_pred_e)
+                r2_e = r2_score(y_true_e, y_pred_e)
+
+                # Pearson correlation
+                if len(y_true_e) > 1:
+                    corr_e, _ = pearsonr(y_true_e, y_pred_e)
+                else:
+                    corr_e = 0.0
+
+                metrics[f'{mode}_mse_{e}'] = mse_e
+                metrics[f'{mode}_mae_{e}'] = mae_e
+                metrics[f'{mode}_r2_{e}'] = r2_e
+                metrics[f'{mode}_corrcoef_{e}'] = corr_e
+
+                print(f"  Emotion {e}: MSE={mse_e:.4f}, MAE={mae_e:.4f}, "
+                      f"R2={r2_e:.4f}, Corr={corr_e:.4f}")
+
+            print(f"\nOverall {mode} - MSE: {mse_overall:.4f}, MAE: {mae_overall:.4f}, "
+                  f"R2: {r2_overall:.4f}")
         print("="*80)
 
         return metrics
@@ -371,7 +441,8 @@ class SVRBaseline:
             'C': self.C,
             'epsilon': self.epsilon,
             'standardize': self.standardize,
-            'feature_dim': self.feature_dim
+            'feature_dim': self.feature_dim,
+            'task_type': self.task_type
         }
 
         with open(save_path, 'wb') as f:
@@ -393,6 +464,7 @@ class SVRBaseline:
         self.epsilon = state['epsilon']
         self.standardize = state['standardize']
         self.feature_dim = state['feature_dim']
+        self.task_type = state.get('task_type', 'regression')  # Backward compatibility
         self.fitted = True
 
         print(f"\nSVR model loaded from {load_path}")

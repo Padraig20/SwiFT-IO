@@ -8,7 +8,7 @@ import pickle
 
 from torchmetrics import PearsonCorrCoef # Accuracy,
 from torchmetrics.regression import R2Score
-from sklearn.metrics import balanced_accuracy_score, accuracy_score, roc_auc_score
+from sklearn.metrics import balanced_accuracy_score, accuracy_score, roc_auc_score, roc_curve
 from sklearn.preprocessing import label_binarize
 import monai.transforms as monai_t
 
@@ -79,11 +79,27 @@ class LitClassifier(pl.LightningModule):
         if data_module and hasattr(data_module, "train_dataset"):
             target_values = data_module.train_dataset.target_values
 
+            # Filter out invalid values (object dtype or non-numeric)
+            import numpy as np
+            if target_values.dtype == np.object_:
+                print(f"⚠️ Warning: target_values has object dtype. Converting to float and filtering invalid values...")
+                # Try to convert to float, filtering out invalid entries
+                valid_mask = np.ones(len(target_values), dtype=bool)
+                for i, val in enumerate(target_values):
+                    try:
+                        float(val)
+                    except (ValueError, TypeError):
+                        valid_mask[i] = False
+                        print(f"  Skipping invalid value at index {i}: {val}")
+
+                target_values = target_values[valid_mask].astype(np.float32)
+                print(f"  Filtered {np.sum(~valid_mask)} invalid values. Remaining: {len(target_values)}")
+
             if self.hparams.label_scaling_method == 'standardization':
                 scaler = StandardScaler()
                 normalized_target_values = scaler.fit_transform(target_values)
                 print(f'target_mean:{scaler.mean_[0]}, target_std:{scaler.scale_[0]}')
-            elif self.hparams.label_scaling_method == 'minmax': 
+            elif self.hparams.label_scaling_method == 'minmax':
                 scaler = MinMaxScaler()
                 normalized_target_values = scaler.fit_transform(target_values)
                 print(f'target_max:{scaler.data_max_[0]},target_min:{scaler.data_min_[0]}')
@@ -92,6 +108,8 @@ class LitClassifier(pl.LightningModule):
             print("⚠️ No train_dataset provided — skipping target normalization")
             self.scaler = None  # fallback: not used
 
+        # Initialize optimal thresholds (will be calculated on validation set)
+        self.optimal_thresholds = None
 
         print(self.hparams.model)
         self.model = load_model(self.hparams.model, self.hparams)
@@ -162,11 +180,17 @@ class LitClassifier(pl.LightningModule):
 
         # Classification task
         if self.hparams.downstream_task_type == 'classification':
-            logits = self.output_head(feature).squeeze() # (b,num_classes)  /  (b,t,num_targets,num_classes)
-            target = target_value.float().squeeze()      # (b,num_classes)  /  (b,t,num_targets,num_classes)
+            logits = self.output_head(feature)  # (b, num_classes) or (b, t, num_targets, num_classes)
+            target = target_value.float().squeeze()  # (b, num_classes) or (b, t, num_targets)
             if self.hparams.decoder in ['series_decoder', 'lstm_series_regression_head']:
                 logits = rearrange(logits, 'b t ta c -> b (t ta) c')
                 target = rearrange(target, 'b t ta -> b (t ta)')
+            else:
+                # For non-series decoders, squeeze if needed
+                if logits.dim() > 2:
+                    logits = logits.squeeze()
+                if target.dim() > 2:
+                    target = target.squeeze()
         # Regression task
         elif self.hparams.downstream_task_type == 'regression':
 
@@ -318,11 +342,18 @@ class LitClassifier(pl.LightningModule):
             accuracy = accuracy_score(targets_np, predictions_np)
             balanced_accuracy = balanced_accuracy_score(targets_np, predictions_np)
 
-            if num_classes == 2:
-                roc_auc = roc_auc_score(targets_np, predictions_np)
-            else: 
-                targets_one_hot = label_binarize(targets_np, classes=np.arange(num_classes))
-                roc_auc = roc_auc_score(targets_one_hot, probabilities.cpu().detach().numpy(), multi_class='ovr')
+            # ROC AUC calculation (handle case where only one class is present)
+            try:
+                if num_classes == 2:
+                    roc_auc = roc_auc_score(targets_np, predictions_np)
+                else:
+                    targets_one_hot = label_binarize(targets_np, classes=np.arange(num_classes))
+                    roc_auc = roc_auc_score(targets_one_hot, probabilities.cpu().detach().numpy(), multi_class='ovr')
+            except ValueError as e:
+                # Only one class present in y_true (common in sanity check with 2 batches)
+                print(f"[WARNING] ROC AUC calculation failed: {e}")
+                print(f"[WARNING] Unique classes in targets: {np.unique(targets_np)}")
+                roc_auc = float('nan')  # Mark as undefined rather than guessing 0.5
 
             if self.hparams.decoder in ['series_decoder', 'lstm_series_regression_head']:
                 
@@ -337,20 +368,35 @@ class LitClassifier(pl.LightningModule):
                     target_group = subj_targets[..., i]
                     
                     probabilities = F.softmax(logits_group.to(dtype=torch.float32), dim=-1) # (b, temporal_size, num_classes), require 32 bit precision
-                    predictions = probabilities.argmax(dim=-1) # (b, temporal_size)
+
+                    # Use optimal threshold if available, otherwise use argmax (threshold=0.5)
+                    if self.optimal_thresholds and i in self.optimal_thresholds and mode == 'test':
+                        opt_thr = self.optimal_thresholds[i]
+                        predictions = (probabilities[..., 1] >= opt_thr).long()  # (b, temporal_size)
+                        if self.trainer.is_global_zero:  # Only print once in distributed training
+                            print(f"  [INFO] Emotion {i} ({mode}): Using optimal threshold {opt_thr:.4f}")
+                    else:
+                        predictions = probabilities.argmax(dim=-1) # (b, temporal_size)
                     
                     predictions_np = predictions.flatten().cpu().numpy()
                     targets_np = target_group.flatten().cpu().numpy()
                     
                     accuracy_group = accuracy_score(targets_np, predictions_np)
                     balanced_accuracy_group = balanced_accuracy_score(targets_np, predictions_np)
-                    
-                    if num_classes == 2:
-                        roc_auc_group = roc_auc_score(targets_np, predictions_np)
-                    else: 
-                        targets_one_hot = label_binarize(targets_np, classes=np.arange(num_classes))
-                        roc_auc_group = roc_auc_score(targets_one_hot, rearrange(probabilities, 'b t c -> (b t) c').cpu().detach().numpy(), multi_class='ovr')
-                    
+
+                    # ROC AUC calculation per emotion (handle case where only one class is present)
+                    try:
+                        if num_classes == 2:
+                            roc_auc_group = roc_auc_score(targets_np, predictions_np)
+                        else:
+                            targets_one_hot = label_binarize(targets_np, classes=np.arange(num_classes))
+                            roc_auc_group = roc_auc_score(targets_one_hot, rearrange(probabilities, 'b t c -> (b t) c').cpu().detach().numpy(), multi_class='ovr')
+                    except ValueError as e:
+                        # Only one class present in y_true for this emotion (common in sanity check)
+                        print(f"[WARNING] ROC AUC calculation failed for emotion {i}: {e}")
+                        print(f"[WARNING] Unique classes for emotion {i}: {np.unique(targets_np)}")
+                        roc_auc_group = float('nan')  # Mark as undefined rather than guessing 0.5
+
                     self.log(f"{mode_str}_acc_{i}", accuracy_group, sync_dist=True)
                     self.log(f"{mode_str}_balacc_{i}", balanced_accuracy_group, sync_dist=True)
                     self.log(f"{mode_str}_AUROC_{i}", roc_auc_group, sync_dist=True)
@@ -421,6 +467,91 @@ class LitClassifier(pl.LightningModule):
             self.log(f"{mode_str}_adjusted_mse", adjusted_mse, sync_dist=True) 
             self.log(f"{mode_str}_adjusted_mae", adjusted_mae, sync_dist=True)
 
+    def _calculate_optimal_thresholds(self, subj_array, total_out):
+        """Calculate optimal thresholds using Youden Index on validation data"""
+        if self.hparams.downstream_task_type != 'classification':
+            return
+
+        if self.hparams.decoder not in ['series_decoder', 'lstm_series_regression_head']:
+            return
+
+        if self.hparams.num_classes != 2:
+            print("[INFO] Youden threshold only supported for binary classification")
+            return
+
+        subjects = np.unique(subj_array)
+
+        subj_avg_logits = []
+        subj_targets = []
+        for subj in subjects:
+            subj_logits = [total_out[i][0] for i in range(len(subj_array)) if subj_array[i] == subj]
+            subj_avg_logits.append(subj_logits)
+            subj_targets.append([total_out[i][1] for i in range(len(subj_array)) if subj_array[i] == subj][0])
+
+        subj_avg_logits = [i[0] for i in subj_avg_logits]
+        subj_avg_logits = torch.stack(subj_avg_logits)
+        subj_targets = torch.stack(subj_targets)
+
+        print("\n" + "="*80)
+        print("CALCULATING OPTIMAL THRESHOLDS (Youden Index)")
+        print("="*80)
+
+        t = self.hparams.img_size[3]
+
+        # First flatten: (b, t*ta, c) -> (b*t*ta, c)
+        subj_avg_logits = rearrange(subj_avg_logits, 'b tta c -> (b tta) c')
+        subj_targets = subj_targets.flatten()
+
+        # Then reshape: (b*t*ta, c) -> (b, t, ta, c)
+        subj_avg_logits = rearrange(subj_avg_logits, '(b t ta) c -> b t ta c',
+                                   t=t, ta=self.hparams.num_targets, c=self.hparams.num_classes)
+        subj_targets = rearrange(subj_targets, '(b t ta) -> b t ta',
+                                t=t, ta=self.hparams.num_targets)
+
+        optimal_thresholds = {}
+
+        for i in range(self.hparams.num_targets):
+            logits_emotion = subj_avg_logits[:, :, i, :]  # (batch, time, num_classes)
+            targets_emotion = subj_targets[:, :, i]  # (batch, time)
+
+            # Get probabilities for class 1
+            probs = F.softmax(logits_emotion.to(dtype=torch.float32), dim=-1)
+            probs_pos = probs[..., 1]
+
+            # Flatten
+            probs_flat = probs_pos.flatten().cpu().numpy()
+            targets_flat = targets_emotion.flatten().cpu().numpy()
+
+            # Remove NaN
+            valid_mask = ~np.isnan(targets_flat) & ~np.isnan(probs_flat)
+            probs_flat = probs_flat[valid_mask]
+            targets_flat = targets_flat[valid_mask]
+
+            if len(targets_flat) == 0:
+                print(f"  Emotion {i}: No valid samples - using default threshold 0.5")
+                optimal_thresholds[i] = 0.5
+                continue
+
+            # Check if both classes present
+            unique_classes = np.unique(targets_flat)
+            if len(unique_classes) < 2:
+                print(f"  Emotion {i}: Only one class ({unique_classes}) - using default threshold 0.5")
+                optimal_thresholds[i] = 0.5
+                continue
+
+            # Calculate ROC curve
+            fpr, tpr, thresholds = roc_curve(targets_flat, probs_flat)
+
+            # Youden index = TPR - FPR
+            j_scores = tpr - fpr
+            optimal_idx = j_scores.argmax()
+            opt_thr = float(thresholds[optimal_idx])
+
+            optimal_thresholds[i] = opt_thr
+            print(f"  Emotion {i}: Optimal threshold = {opt_thr:.4f} (J={j_scores[optimal_idx]:.4f})")
+
+        self.optimal_thresholds = optimal_thresholds
+        print("="*80 + "\n")
 
     def training_step(self, batch, batch_idx):
         """
@@ -501,6 +632,10 @@ class LitClassifier(pl.LightningModule):
 
         # evaluate
         self._evaluate_metrics(subj_valid, total_out_valid, mode="valid")
+
+        # Calculate optimal thresholds from validation set
+        self._calculate_optimal_thresholds(subj_valid, total_out_valid)
+
         if not self.valid_only:
             self._evaluate_metrics(subj_test, total_out_test, mode="test")
             

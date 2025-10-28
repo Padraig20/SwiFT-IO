@@ -64,9 +64,12 @@ def main():
     parser.add_argument("--C", type=float, default=1.0,
                        help="SVR regularization parameter")
     parser.add_argument("--epsilon", type=float, default=0.1,
-                       help="Epsilon in epsilon-SVR")
+                       help="Epsilon in epsilon-SVR (only for regression)")
     parser.add_argument("--standardize", action='store_true', default=True,
                        help="Standardize features")
+    parser.add_argument("--task_type", type=str, default="regression",
+                       choices=['regression', 'classification'],
+                       help="Task type: regression or classification")
 
     # Data loading arguments
     parser.add_argument("--batch_size", type=int, default=4,
@@ -105,11 +108,15 @@ def main():
     print("SVR Baseline Training")
     print("="*80)
     print(f"Task: {args.downstream_task}")
+    print(f"Task type: {args.task_type}")
     print(f"Input type: {args.input_type}")
     print(f"Split seed: {args.dataset_split_seed}")
     print(f"Sequence length: {args.sequence_length}")
     print(f"SVR kernel: {args.kernel}")
-    print(f"C: {args.C}, epsilon: {args.epsilon}")
+    if args.task_type == 'regression':
+        print(f"C: {args.C}, epsilon: {args.epsilon}")
+    else:
+        print(f"C: {args.C}")
     print("="*80)
 
     # ===== 1. Setup data module (same as SwiFT-IO) =====
@@ -146,7 +153,8 @@ def main():
         kernel=args.kernel,
         C=args.C,
         epsilon=args.epsilon,
-        standardize=args.standardize
+        standardize=args.standardize,
+        task_type=args.task_type
     )
 
     # ===== 3. Train SVR =====
@@ -210,15 +218,23 @@ def main():
     print("SVR Baseline Training Complete!")
     print("="*80)
     print(f"\nFinal Results:")
-    print(f"  Train MSE: {train_metrics['train_mse']:.4f}")
-    print(f"  Train MAE: {train_metrics['train_mae']:.4f}")
-    print(f"  Train R2:  {train_metrics['train_r2']:.4f}")
-    print(f"\n  Valid MSE: {val_metrics['valid_mse']:.4f}")
-    print(f"  Valid MAE: {val_metrics['valid_mae']:.4f}")
-    print(f"  Valid R2:  {val_metrics['valid_r2']:.4f}")
-    print(f"\n  Test MSE:  {test_metrics['test_mse']:.4f}")
-    print(f"  Test MAE:  {test_metrics['test_mae']:.4f}")
-    print(f"  Test R2:   {test_metrics['test_r2']:.4f}")
+    if args.task_type == 'regression':
+        print(f"  Train MSE: {train_metrics['train_mse']:.4f}")
+        print(f"  Train MAE: {train_metrics['train_mae']:.4f}")
+        print(f"  Train R2:  {train_metrics['train_r2']:.4f}")
+        print(f"\n  Valid MSE: {val_metrics['valid_mse']:.4f}")
+        print(f"  Valid MAE: {val_metrics['valid_mae']:.4f}")
+        print(f"  Valid R2:  {val_metrics['valid_r2']:.4f}")
+        print(f"\n  Test MSE:  {test_metrics['test_mse']:.4f}")
+        print(f"  Test MAE:  {test_metrics['test_mae']:.4f}")
+        print(f"  Test R2:   {test_metrics['test_r2']:.4f}")
+    else:  # classification
+        print(f"  Train Acc: {train_metrics['train_acc']:.4f}")
+        print(f"  Train F1:  {train_metrics['train_f1']:.4f}")
+        print(f"\n  Valid Acc: {val_metrics['valid_acc']:.4f}")
+        print(f"  Valid F1:  {val_metrics['valid_f1']:.4f}")
+        print(f"\n  Test Acc:  {test_metrics['test_acc']:.4f}")
+        print(f"  Test F1:   {test_metrics['test_f1']:.4f}")
     print(f"\nOutput directory: {args.output_dir}")
     print("="*80)
 
@@ -228,15 +244,23 @@ def main():
         f.write("SVR Baseline Training Summary\n")
         f.write("="*80 + "\n\n")
         f.write(f"Task: {args.downstream_task}\n")
+        f.write(f"Task type: {args.task_type}\n")
         f.write(f"Input type: {args.input_type}\n")
         f.write(f"Sequence length: {args.sequence_length}\n")
         f.write(f"Split seed: {args.dataset_split_seed}\n")
         f.write(f"SVR kernel: {args.kernel}\n")
-        f.write(f"C: {args.C}, epsilon: {args.epsilon}\n\n")
-        f.write(f"Final Results:\n")
-        f.write(f"  Train MSE: {train_metrics['train_mse']:.4f}\n")
-        f.write(f"  Valid MSE: {val_metrics['valid_mse']:.4f}\n")
-        f.write(f"  Test MSE:  {test_metrics['test_mse']:.4f}\n")
+        if args.task_type == 'regression':
+            f.write(f"C: {args.C}, epsilon: {args.epsilon}\n\n")
+            f.write(f"Final Results:\n")
+            f.write(f"  Train MSE: {train_metrics['train_mse']:.4f}\n")
+            f.write(f"  Valid MSE: {val_metrics['valid_mse']:.4f}\n")
+            f.write(f"  Test MSE:  {test_metrics['test_mse']:.4f}\n")
+        else:  # classification
+            f.write(f"C: {args.C}\n\n")
+            f.write(f"Final Results:\n")
+            f.write(f"  Train Acc: {train_metrics['train_acc']:.4f}\n")
+            f.write(f"  Valid Acc: {val_metrics['valid_acc']:.4f}\n")
+            f.write(f"  Test Acc:  {test_metrics['test_acc']:.4f}\n")
 
     print(f"\nSummary saved to: {summary_path}")
 

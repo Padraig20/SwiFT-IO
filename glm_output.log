@@ -1,0 +1,781 @@
+================================================================================
+GLM Baseline Training
+================================================================================
+Task: emotions
+Input type: movieDM
+Split seed: 777
+Sequence length: 20
+Use emotion ROIs only: True
+================================================================================
+
+[Step 1] Getting train/val/test splits...
+Found 677 subjects with ROI timeseries
+Train subjects: 473
+Val subjects: 101
+Test subjects: 103
+
+[Step 2] Loading emotion labels...
+Emotion labels shape: (750, 7)
+Emotion names: ['Anger_conv', 'Happy_conv', 'Fear_conv', 'Sad_conv', 'Excited_conv', 'Positive_conv', 'Negative_conv']
+
+[Step 3] Initializing GLM baseline...
+
+[Step 4] Training GLM...
+
+=== Training GLM Baseline ===
+Loading ROI timeseries for 473 subjects...
+  0%|          | 0/473 [00:00<?, ?it/s]  1%|          | 5/473 [00:00<00:10, 45.49it/s]  2%|▏         | 10/473 [00:00<00:20, 22.64it/s]  3%|▎         | 13/473 [00:00<00:19, 24.08it/s]  3%|▎         | 16/473 [00:00<00:22, 20.75it/s]  4%|▍         | 20/473 [00:00<00:18, 24.47it/s]  5%|▍         | 23/473 [00:00<00:17, 25.45it/s]  5%|▌         | 26/473 [00:01<00:18, 24.15it/s]  6%|▋         | 30/473 [00:01<00:16, 26.76it/s]  7%|▋         | 33/473 [00:01<00:16, 26.12it/s]  8%|▊         | 36/473 [00:01<00:17, 25.48it/s]  8%|▊         | 40/473 [00:01<00:16, 26.78it/s]  9%|▉         | 43/473 [00:01<00:18, 22.69it/s] 10%|▉         | 47/473 [00:01<00:17, 24.70it/s] 11%|█         | 51/473 [00:01<00:15, 28.00it/s] 12%|█▏        | 57/473 [00:02<00:12, 34.48it/s] 13%|█▎        | 61/473 [00:02<00:15, 27.34it/s] 14%|█▍        | 66/473 [00:02<00:14, 28.94it/s] 15%|█▌        | 71/473 [00:02<00:12, 32.89it/s] 16%|█▌        | 75/473 [00:02<00:13, 30.18it/s] 17%|█▋        | 80/473 [00:02<00:11, 34.18it/s] 18%|█▊        | 84/473 [00:03<00:13, 29.05it/s] 19%|█▊        | 88/473 [00:03<00:12, 30.74it/s] 19%|█▉        | 92/473 [00:03<00:16, 23.16it/s] 20%|██        | 95/473 [00:03<00:16, 22.43it/s] 21%|██        | 98/473 [00:03<00:15, 23.78it/s] 22%|██▏       | 103/473 [00:03<00:12, 28.68it/s] 23%|██▎       | 107/473 [00:03<00:12, 28.18it/s] 24%|██▍       | 113/473 [00:04<00:10, 34.53it/s] 25%|██▍       | 118/473 [00:04<00:09, 37.80it/s] 26%|██▌       | 123/473 [00:04<00:10, 33.56it/s] 27%|██▋       | 127/473 [00:04<00:12, 27.29it/s] 28%|██▊       | 131/473 [00:04<00:14, 23.96it/s] 29%|██▉       | 136/473 [00:04<00:11, 28.86it/s] 30%|██▉       | 141/473 [00:05<00:11, 29.77it/s] 31%|███       | 145/473 [00:05<00:10, 30.39it/s] 32%|███▏      | 149/473 [00:05<00:10, 31.77it/s] 33%|███▎      | 154/473 [00:05<00:09, 34.54it/s] 34%|███▎      | 159/473 [00:05<00:09, 34.38it/s] 34%|███▍      | 163/473 [00:05<00:11, 26.57it/s] 35%|███▌      | 167/473 [00:05<00:11, 27.32it/s] 37%|███▋      | 173/473 [00:06<00:09, 33.33it/s] 37%|███▋      | 177/473 [00:06<00:11, 26.40it/s] 38%|███▊      | 181/473 [00:06<00:12, 24.29it/s] 39%|███▉      | 184/473 [00:06<00:13, 21.86it/s] 40%|███▉      | 189/473 [00:06<00:10, 26.01it/s] 41%|████      | 192/473 [00:06<00:10, 26.38it/s] 41%|████      | 195/473 [00:07<00:12, 22.66it/s] 42%|████▏     | 199/473 [00:07<00:10, 26.21it/s] 43%|████▎     | 202/473 [00:07<00:10, 24.97it/s] 44%|████▍     | 208/473 [00:07<00:08, 30.95it/s] 45%|████▌     | 214/473 [00:07<00:07, 35.68it/s] 46%|████▋     | 219/473 [00:07<00:06, 39.15it/s] 47%|████▋     | 224/473 [00:07<00:08, 28.68it/s] 48%|████▊     | 228/473 [00:08<00:08, 28.20it/s] 49%|████▉     | 232/473 [00:08<00:09, 25.97it/s] 50%|████▉     | 236/473 [00:08<00:08, 26.45it/s] 51%|█████     | 239/473 [00:08<00:08, 26.09it/s] 51%|█████     | 242/473 [00:08<00:08, 25.91it/s] 52%|█████▏    | 248/473 [00:08<00:07, 29.33it/s] 53%|█████▎    | 252/473 [00:08<00:07, 30.67it/s] 54%|█████▍    | 256/473 [00:09<00:07, 29.29it/s] 55%|█████▍    | 260/473 [00:09<00:06, 31.05it/s] 56%|█████▌    | 264/473 [00:09<00:06, 30.51it/s] 57%|█████▋    | 268/473 [00:09<00:06, 32.67it/s] 58%|█████▊    | 272/473 [00:09<00:08, 25.10it/s] 59%|█████▉    | 278/473 [00:09<00:06, 32.21it/s] 60%|██████    | 285/473 [00:09<00:04, 39.12it/s] 61%|██████▏   | 290/473 [00:10<00:05, 34.60it/s] 62%|██████▏   | 294/473 [00:10<00:05, 30.93it/s] 63%|██████▎   | 299/473 [00:10<00:05, 33.35it/s] 64%|██████▍   | 303/473 [00:10<00:05, 31.77it/s] 65%|██████▍   | 307/473 [00:10<00:05, 28.00it/s] 66%|██████▌   | 310/473 [00:10<00:05, 27.24it/s] 66%|██████▋   | 314/473 [00:10<00:05, 29.69it/s] 67%|██████▋   | 318/473 [00:11<00:05, 30.91it/s] 68%|██████▊   | 322/473 [00:11<00:04, 30.85it/s] 69%|██████▉   | 327/473 [00:11<00:04, 33.63it/s] 70%|██████▉   | 331/473 [00:11<00:04, 33.43it/s] 71%|███████   | 336/473 [00:11<00:03, 35.58it/s] 72%|███████▏  | 340/473 [00:11<00:04, 30.80it/s] 73%|███████▎  | 344/473 [00:11<00:05, 25.62it/s] 73%|███████▎  | 347/473 [00:12<00:04, 26.16it/s] 74%|███████▍  | 350/473 [00:12<00:04, 26.65it/s] 75%|███████▍  | 353/473 [00:12<00:04, 25.02it/s] 75%|███████▌  | 356/473 [00:12<00:04, 23.81it/s] 76%|███████▌  | 359/473 [00:12<00:04, 25.00it/s] 77%|███████▋  | 363/473 [00:12<00:04, 27.38it/s] 77%|███████▋  | 366/473 [00:12<00:04, 25.84it/s] 78%|███████▊  | 369/473 [00:12<00:04, 24.81it/s] 79%|███████▊  | 372/473 [00:13<00:04, 21.43it/s] 79%|███████▉  | 375/473 [00:13<00:04, 23.07it/s] 80%|███████▉  | 378/473 [00:13<00:04, 22.62it/s] 81%|████████  | 382/473 [00:13<00:03, 23.48it/s] 81%|████████▏ | 385/473 [00:13<00:04, 21.36it/s] 83%|████████▎ | 391/473 [00:13<00:02, 28.83it/s] 84%|████████▎ | 395/473 [00:14<00:03, 23.98it/s] 84%|████████▍ | 399/473 [00:14<00:02, 26.03it/s] 85%|████████▌ | 403/473 [00:14<00:02, 26.44it/s] 86%|████████▌ | 406/473 [00:14<00:02, 26.44it/s] 87%|████████▋ | 411/473 [00:14<00:02, 28.35it/s] 88%|████████▊ | 414/473 [00:14<00:02, 27.75it/s] 88%|████████▊ | 417/473 [00:14<00:02, 27.35it/s] 89%|████████▉ | 422/473 [00:14<00:01, 32.19it/s] 90%|█████████ | 426/473 [00:15<00:01, 24.63it/s] 91%|█████████ | 430/473 [00:15<00:01, 26.65it/s] 92%|█████████▏| 433/473 [00:15<00:01, 26.74it/s] 92%|█████████▏| 436/473 [00:15<00:01, 27.21it/s] 93%|█████████▎| 441/473 [00:15<00:01, 29.62it/s] 94%|█████████▍| 445/473 [00:15<00:01, 26.94it/s] 95%|█████████▌| 450/473 [00:16<00:00, 29.07it/s] 96%|█████████▌| 453/473 [00:16<00:00, 28.52it/s] 97%|█████████▋| 459/473 [00:16<00:00, 31.33it/s] 98%|█████████▊| 464/473 [00:16<00:00, 34.72it/s] 99%|█████████▉| 470/473 [00:16<00:00, 36.03it/s]100%|██████████| 473/473 [00:16<00:00, 28.36it/s]
+Selected 34 emotion-related ROIs from 109 total ROIs
+Selected 34 ROIs
+Selected 34 emotion-related ROIs from 109 total ROIs
+Selected 34 emotion-related ROIs from 109 total ROIs
+Selected 34 emotion-related ROIs from 182 total ROIs
+Selected 34 emotion-related ROIs from 109 total ROIs
+Selected 34 emotion-related ROIs from 152 total ROIs
+Selected 34 emotion-related ROIs from 151 total ROIs
+Selected 34 emotion-related ROIs from 665 total ROIs
+Selected 34 emotion-related ROIs from 415 total ROIs
+Selected 34 emotion-related ROIs from 427 total ROIs
+Selected 34 emotion-related ROIs from 110 total ROIs
+Selected 34 emotion-related ROIs from 110 total ROIs
+Selected 34 emotion-related ROIs from 422 total ROIs
+Selected 34 emotion-related ROIs from 109 total ROIs
+Selected 34 emotion-related ROIs from 494 total ROIs
+Selected 34 emotion-related ROIs from 524 total ROIs
+Selected 34 emotion-related ROIs from 394 total ROIs
+Selected 34 emotion-related ROIs from 109 total ROIs
+Selected 34 emotion-related ROIs from 109 total ROIs
+Selected 34 emotion-related ROIs from 109 total ROIs
+Selected 34 emotion-related ROIs from 110 total ROIs
+Selected 34 emotion-related ROIs from 423 total ROIs
+Selected 34 emotion-related ROIs from 109 total ROIs
+Selected 34 emotion-related ROIs from 109 total ROIs
+Selected 34 emotion-related ROIs from 488 total ROIs
+Selected 34 emotion-related ROIs from 228 total ROIs
+Selected 34 emotion-related ROIs from 108 total ROIs
+Selected 34 emotion-related ROIs from 110 total ROIs
+Selected 34 emotion-related ROIs from 109 total ROIs
+Selected 34 emotion-related ROIs from 242 total ROIs
+Selected 34 emotion-related ROIs from 109 total ROIs
+Selected 34 emotion-related ROIs from 548 total ROIs
+Selected 34 emotion-related ROIs from 109 total ROIs
+Selected 34 emotion-related ROIs from 157 total ROIs
+Selected 34 emotion-related ROIs from 425 total ROIs
+Selected 34 emotion-related ROIs from 109 total ROIs
+Selected 34 emotion-related ROIs from 110 total ROIs
+Selected 34 emotion-related ROIs from 109 total ROIs
+Selected 34 emotion-related ROIs from 144 total ROIs
+Selected 34 emotion-related ROIs from 255 total ROIs
+Selected 34 emotion-related ROIs from 569 total ROIs
+Selected 34 emotion-related ROIs from 192 total ROIs
+Selected 34 emotion-related ROIs from 437 total ROIs
+Selected 34 emotion-related ROIs from 148 total ROIs
+Selected 34 emotion-related ROIs from 109 total ROIs
+Selected 34 emotion-related ROIs from 110 total ROIs
+Selected 34 emotion-related ROIs from 503 total ROIs
+Selected 34 emotion-related ROIs from 187 total ROIs
+Selected 34 emotion-related ROIs from 150 total ROIs
+Selected 34 emotion-related ROIs from 207 total ROIs
+Selected 34 emotion-related ROIs from 109 total ROIs
+Selected 34 emotion-related ROIs from 138 total ROIs
+Selected 34 emotion-related ROIs from 110 total ROIs
+Selected 34 emotion-related ROIs from 171 total ROIs
+Selected 34 emotion-related ROIs from 111 total ROIs
+Selected 34 emotion-related ROIs from 110 total ROIs
+Selected 34 emotion-related ROIs from 130 total ROIs
+Selected 34 emotion-related ROIs from 524 total ROIs
+Selected 34 emotion-related ROIs from 439 total ROIs
+Selected 34 emotion-related ROIs from 109 total ROIs
+Selected 34 emotion-related ROIs from 381 total ROIs
+Selected 34 emotion-related ROIs from 154 total ROIs
+Selected 34 emotion-related ROIs from 219 total ROIs
+Selected 34 emotion-related ROIs from 109 total ROIs
+Selected 34 emotion-related ROIs from 109 total ROIs
+Selected 34 emotion-related ROIs from 330 total ROIs
+Selected 34 emotion-related ROIs from 110 total ROIs
+Selected 34 emotion-related ROIs from 110 total ROIs
+Selected 34 emotion-related ROIs from 110 total ROIs
+Selected 34 emotion-related ROIs from 109 total ROIs
+Selected 34 emotion-related ROIs from 220 total ROIs
+Selected 34 emotion-related ROIs from 110 total ROIs
+Selected 34 emotion-related ROIs from 227 total ROIs
+Selected 34 emotion-related ROIs from 110 total ROIs
+Selected 34 emotion-related ROIs from 589 total ROIs
+Selected 34 emotion-related ROIs from 156 total ROIs
+Selected 34 emotion-related ROIs from 157 total ROIs
+Selected 34 emotion-related ROIs from 109 total ROIs
+Selected 34 emotion-related ROIs from 110 total ROIs
+Selected 34 emotion-related ROIs from 152 total ROIs
+Selected 34 emotion-related ROIs from 436 total ROIs
+Selected 34 emotion-related ROIs from 154 total ROIs
+Selected 34 emotion-related ROIs from 465 total ROIs
+Selected 34 emotion-related ROIs from 191 total ROIs
+Selected 34 emotion-related ROIs from 110 total ROIs
+Selected 34 emotion-related ROIs from 371 total ROIs
+Selected 34 emotion-related ROIs from 109 total ROIs
+Selected 34 emotion-related ROIs from 109 total ROIs
+Selected 34 emotion-related ROIs from 170 total ROIs
+Selected 34 emotion-related ROIs from 533 total ROIs
+Selected 34 emotion-related ROIs from 538 total ROIs
+Selected 34 emotion-related ROIs from 562 total ROIs
+Selected 34 emotion-related ROIs from 497 total ROIs
+Selected 34 emotion-related ROIs from 109 total ROIs
+Selected 34 emotion-related ROIs from 304 total ROIs
+Selected 34 emotion-related ROIs from 111 total ROIs
+Selected 34 emotion-related ROIs from 109 total ROIs
+Selected 34 emotion-related ROIs from 421 total ROIs
+Selected 34 emotion-related ROIs from 143 total ROIs
+Selected 34 emotion-related ROIs from 161 total ROIs
+Selected 34 emotion-related ROIs from 139 total ROIs
+Selected 34 emotion-related ROIs from 109 total ROIs
+Selected 34 emotion-related ROIs from 196 total ROIs
+Selected 34 emotion-related ROIs from 253 total ROIs
+Selected 34 emotion-related ROIs from 475 total ROIs
+Selected 34 emotion-related ROIs from 110 total ROIs
+Selected 34 emotion-related ROIs from 109 total ROIs
+Selected 34 emotion-related ROIs from 109 total ROIs
+Selected 34 emotion-related ROIs from 109 total ROIs
+Selected 34 emotion-related ROIs from 109 total ROIs
+Selected 34 emotion-related ROIs from 109 total ROIs
+Selected 34 emotion-related ROIs from 109 total ROIs
+Selected 34 emotion-related ROIs from 178 total ROIs
+Selected 34 emotion-related ROIs from 109 total ROIs
+Selected 34 emotion-related ROIs from 162 total ROIs
+Selected 34 emotion-related ROIs from 155 total ROIs
+Selected 34 emotion-related ROIs from 164 total ROIs
+Selected 34 emotion-related ROIs from 108 total ROIs
+Selected 34 emotion-related ROIs from 111 total ROIs
+Selected 34 emotion-related ROIs from 336 total ROIs
+Selected 34 emotion-related ROIs from 442 total ROIs
+Selected 34 emotion-related ROIs from 109 total ROIs
+Selected 34 emotion-related ROIs from 199 total ROIs
+Selected 34 emotion-related ROIs from 540 total ROIs
+Selected 34 emotion-related ROIs from 276 total ROIs
+Selected 34 emotion-related ROIs from 110 total ROIs
+Selected 34 emotion-related ROIs from 481 total ROIs
+Selected 34 emotion-related ROIs from 468 total ROIs
+Selected 34 emotion-related ROIs from 253 total ROIs
+Selected 34 emotion-related ROIs from 109 total ROIs
+Selected 34 emotion-related ROIs from 514 total ROIs
+Selected 34 emotion-related ROIs from 180 total ROIs
+Selected 34 emotion-related ROIs from 144 total ROIs
+Selected 34 emotion-related ROIs from 109 total ROIs
+Selected 34 emotion-related ROIs from 151 total ROIs
+Selected 34 emotion-related ROIs from 110 total ROIs
+Selected 34 emotion-related ROIs from 110 total ROIs
+Selected 34 emotion-related ROIs from 109 total ROIs
+Selected 34 emotion-related ROIs from 111 total ROIs
+Selected 34 emotion-related ROIs from 109 total ROIs
+Selected 34 emotion-related ROIs from 611 total ROIs
+Selected 34 emotion-related ROIs from 109 total ROIs
+Selected 34 emotion-related ROIs from 148 total ROIs
+Selected 34 emotion-related ROIs from 341 total ROIs
+Selected 34 emotion-related ROIs from 196 total ROIs
+Selected 34 emotion-related ROIs from 147 total ROIs
+Selected 34 emotion-related ROIs from 234 total ROIs
+Selected 34 emotion-related ROIs from 110 total ROIs
+Selected 34 emotion-related ROIs from 215 total ROIs
+Selected 34 emotion-related ROIs from 109 total ROIs
+Selected 34 emotion-related ROIs from 218 total ROIs
+Selected 34 emotion-related ROIs from 169 total ROIs
+Selected 34 emotion-related ROIs from 109 total ROIs
+Selected 34 emotion-related ROIs from 164 total ROIs
+Selected 34 emotion-related ROIs from 109 total ROIs
+Selected 34 emotion-related ROIs from 109 total ROIs
+Selected 34 emotion-related ROIs from 110 total ROIs
+Selected 34 emotion-related ROIs from 208 total ROIs
+Selected 34 emotion-related ROIs from 469 total ROIs
+Selected 34 emotion-related ROIs from 551 total ROIs
+Selected 34 emotion-related ROIs from 393 total ROIs
+Selected 34 emotion-related ROIs from 520 total ROIs
+Selected 34 emotion-related ROIs from 109 total ROIs
+Warning: 2 ROIs not found in data:
+  - ctx-lh-caudalanteriorcingulate
+  - ctx-lh-rostralanteriorcingulate
+Selected 32 emotion-related ROIs from 111 total ROIs
+Warning: Skipping sub-NDARXR123PFR - has 32 ROIs instead of 34
+Selected 34 emotion-related ROIs from 200 total ROIs
+Selected 34 emotion-related ROIs from 110 total ROIs
+Selected 34 emotion-related ROIs from 455 total ROIs
+Selected 34 emotion-related ROIs from 110 total ROIs
+Selected 34 emotion-related ROIs from 111 total ROIs
+Selected 34 emotion-related ROIs from 109 total ROIs
+Selected 34 emotion-related ROIs from 169 total ROIs
+Selected 34 emotion-related ROIs from 110 total ROIs
+Selected 34 emotion-related ROIs from 109 total ROIs
+Selected 34 emotion-related ROIs from 109 total ROIs
+Selected 34 emotion-related ROIs from 766 total ROIs
+Selected 34 emotion-related ROIs from 417 total ROIs
+Selected 34 emotion-related ROIs from 109 total ROIs
+Selected 34 emotion-related ROIs from 172 total ROIs
+Selected 34 emotion-related ROIs from 159 total ROIs
+Selected 34 emotion-related ROIs from 625 total ROIs
+Selected 34 emotion-related ROIs from 375 total ROIs
+Selected 34 emotion-related ROIs from 497 total ROIs
+Selected 34 emotion-related ROIs from 170 total ROIs
+Selected 34 emotion-related ROIs from 588 total ROIs
+Selected 34 emotion-related ROIs from 154 total ROIs
+Selected 34 emotion-related ROIs from 109 total ROIs
+Selected 34 emotion-related ROIs from 184 total ROIs
+Selected 34 emotion-related ROIs from 202 total ROIs
+Selected 34 emotion-related ROIs from 170 total ROIs
+Selected 34 emotion-related ROIs from 187 total ROIs
+Selected 34 emotion-related ROIs from 367 total ROIs
+Selected 34 emotion-related ROIs from 147 total ROIs
+Selected 34 emotion-related ROIs from 599 total ROIs
+Selected 34 emotion-related ROIs from 476 total ROIs
+Selected 34 emotion-related ROIs from 134 total ROIs
+Selected 34 emotion-related ROIs from 202 total ROIs
+Selected 34 emotion-related ROIs from 110 total ROIs
+Selected 34 emotion-related ROIs from 110 total ROIs
+Selected 34 emotion-related ROIs from 218 total ROIs
+Selected 34 emotion-related ROIs from 166 total ROIs
+Selected 34 emotion-related ROIs from 598 total ROIs
+Selected 34 emotion-related ROIs from 109 total ROIs
+Selected 34 emotion-related ROIs from 109 total ROIs
+Selected 34 emotion-related ROIs from 110 total ROIs
+Selected 34 emotion-related ROIs from 109 total ROIs
+Selected 34 emotion-related ROIs from 111 total ROIs
+Selected 34 emotion-related ROIs from 185 total ROIs
+Selected 34 emotion-related ROIs from 216 total ROIs
+Selected 34 emotion-related ROIs from 109 total ROIs
+Selected 34 emotion-related ROIs from 141 total ROIs
+Selected 34 emotion-related ROIs from 110 total ROIs
+Selected 34 emotion-related ROIs from 109 total ROIs
+Selected 34 emotion-related ROIs from 171 total ROIs
+Selected 34 emotion-related ROIs from 197 total ROIs
+Selected 34 emotion-related ROIs from 145 total ROIs
+Selected 34 emotion-related ROIs from 109 total ROIs
+Selected 34 emotion-related ROIs from 204 total ROIs
+Selected 34 emotion-related ROIs from 109 total ROIs
+Selected 34 emotion-related ROIs from 109 total ROIs
+Selected 34 emotion-related ROIs from 535 total ROIs
+Selected 34 emotion-related ROIs from 111 total ROIs
+Selected 34 emotion-related ROIs from 111 total ROIs
+Selected 34 emotion-related ROIs from 474 total ROIs
+Selected 34 emotion-related ROIs from 496 total ROIs
+Selected 34 emotion-related ROIs from 110 total ROIs
+Selected 34 emotion-related ROIs from 109 total ROIs
+Selected 34 emotion-related ROIs from 605 total ROIs
+Selected 34 emotion-related ROIs from 184 total ROIs
+Selected 34 emotion-related ROIs from 164 total ROIs
+Selected 34 emotion-related ROIs from 404 total ROIs
+Selected 34 emotion-related ROIs from 138 total ROIs
+Selected 34 emotion-related ROIs from 523 total ROIs
+Selected 34 emotion-related ROIs from 109 total ROIs
+Selected 34 emotion-related ROIs from 109 total ROIs
+Selected 34 emotion-related ROIs from 109 total ROIs
+Selected 34 emotion-related ROIs from 664 total ROIs
+Selected 34 emotion-related ROIs from 111 total ROIs
+Selected 34 emotion-related ROIs from 432 total ROIs
+Selected 34 emotion-related ROIs from 211 total ROIs
+Selected 34 emotion-related ROIs from 239 total ROIs
+Selected 34 emotion-related ROIs from 109 total ROIs
+Selected 34 emotion-related ROIs from 411 total ROIs
+Selected 34 emotion-related ROIs from 110 total ROIs
+Selected 34 emotion-related ROIs from 109 total ROIs
+Selected 34 emotion-related ROIs from 162 total ROIs
+Selected 34 emotion-related ROIs from 145 total ROIs
+Selected 34 emotion-related ROIs from 109 total ROIs
+Selected 34 emotion-related ROIs from 453 total ROIs
+Selected 34 emotion-related ROIs from 109 total ROIs
+Selected 34 emotion-related ROIs from 331 total ROIs
+Selected 34 emotion-related ROIs from 197 total ROIs
+Selected 34 emotion-related ROIs from 111 total ROIs
+Selected 34 emotion-related ROIs from 109 total ROIs
+Selected 34 emotion-related ROIs from 192 total ROIs
+Selected 34 emotion-related ROIs from 155 total ROIs
+Selected 34 emotion-related ROIs from 486 total ROIs
+Selected 34 emotion-related ROIs from 108 total ROIs
+Selected 34 emotion-related ROIs from 195 total ROIs
+Selected 34 emotion-related ROIs from 153 total ROIs
+Selected 34 emotion-related ROIs from 217 total ROIs
+Selected 34 emotion-related ROIs from 109 total ROIs
+Selected 34 emotion-related ROIs from 168 total ROIs
+Selected 34 emotion-related ROIs from 432 total ROIs
+Selected 34 emotion-related ROIs from 167 total ROIs
+Selected 34 emotion-related ROIs from 233 total ROIs
+Selected 34 emotion-related ROIs from 109 total ROIs
+Selected 34 emotion-related ROIs from 109 total ROIs
+Selected 34 emotion-related ROIs from 180 total ROIs
+Selected 34 emotion-related ROIs from 474 total ROIs
+Selected 34 emotion-related ROIs from 567 total ROIs
+Selected 34 emotion-related ROIs from 438 total ROIs
+Selected 34 emotion-related ROIs from 155 total ROIs
+Selected 34 emotion-related ROIs from 109 total ROIs
+Selected 34 emotion-related ROIs from 110 total ROIs
+Selected 34 emotion-related ROIs from 109 total ROIs
+Selected 34 emotion-related ROIs from 161 total ROIs
+Selected 34 emotion-related ROIs from 111 total ROIs
+Selected 34 emotion-related ROIs from 109 total ROIs
+Selected 34 emotion-related ROIs from 110 total ROIs
+Selected 34 emotion-related ROIs from 109 total ROIs
+Selected 34 emotion-related ROIs from 109 total ROIs
+Selected 34 emotion-related ROIs from 109 total ROIs
+Selected 34 emotion-related ROIs from 109 total ROIs
+Selected 34 emotion-related ROIs from 109 total ROIs
+Selected 34 emotion-related ROIs from 152 total ROIs
+Selected 34 emotion-related ROIs from 109 total ROIs
+Selected 34 emotion-related ROIs from 443 total ROIs
+Selected 34 emotion-related ROIs from 415 total ROIs
+Selected 34 emotion-related ROIs from 109 total ROIs
+Selected 34 emotion-related ROIs from 152 total ROIs
+Selected 34 emotion-related ROIs from 372 total ROIs
+Selected 34 emotion-related ROIs from 110 total ROIs
+Selected 34 emotion-related ROIs from 181 total ROIs
+Selected 34 emotion-related ROIs from 441 total ROIs
+Selected 34 emotion-related ROIs from 109 total ROIs
+Selected 34 emotion-related ROIs from 109 total ROIs
+Selected 34 emotion-related ROIs from 109 total ROIs
+Selected 34 emotion-related ROIs from 109 total ROIs
+Selected 34 emotion-related ROIs from 367 total ROIs
+Selected 34 emotion-related ROIs from 110 total ROIs
+Selected 34 emotion-related ROIs from 110 total ROIs
+Selected 34 emotion-related ROIs from 225 total ROIs
+Selected 34 emotion-related ROIs from 452 total ROIs
+Selected 34 emotion-related ROIs from 544 total ROIs
+Selected 34 emotion-related ROIs from 399 total ROIs
+Selected 34 emotion-related ROIs from 109 total ROIs
+Selected 34 emotion-related ROIs from 153 total ROIs
+Selected 34 emotion-related ROIs from 111 total ROIs
+Selected 34 emotion-related ROIs from 111 total ROIs
+Selected 34 emotion-related ROIs from 530 total ROIs
+Selected 34 emotion-related ROIs from 110 total ROIs
+Selected 34 emotion-related ROIs from 221 total ROIs
+Selected 34 emotion-related ROIs from 109 total ROIs
+Selected 34 emotion-related ROIs from 151 total ROIs
+Selected 34 emotion-related ROIs from 107 total ROIs
+Selected 34 emotion-related ROIs from 421 total ROIs
+Selected 34 emotion-related ROIs from 110 total ROIs
+Selected 34 emotion-related ROIs from 109 total ROIs
+Selected 34 emotion-related ROIs from 181 total ROIs
+Selected 34 emotion-related ROIs from 110 total ROIs
+Selected 34 emotion-related ROIs from 110 total ROIs
+Selected 34 emotion-related ROIs from 450 total ROIs
+Selected 34 emotion-related ROIs from 109 total ROIs
+Selected 34 emotion-related ROIs from 109 total ROIs
+Selected 34 emotion-related ROIs from 110 total ROIs
+Selected 34 emotion-related ROIs from 110 total ROIs
+Selected 34 emotion-related ROIs from 330 total ROIs
+Selected 34 emotion-related ROIs from 167 total ROIs
+Selected 34 emotion-related ROIs from 109 total ROIs
+Selected 34 emotion-related ROIs from 435 total ROIs
+Selected 34 emotion-related ROIs from 109 total ROIs
+Selected 34 emotion-related ROIs from 110 total ROIs
+Selected 34 emotion-related ROIs from 109 total ROIs
+Selected 34 emotion-related ROIs from 111 total ROIs
+Selected 34 emotion-related ROIs from 109 total ROIs
+Selected 34 emotion-related ROIs from 374 total ROIs
+Selected 34 emotion-related ROIs from 624 total ROIs
+Selected 34 emotion-related ROIs from 162 total ROIs
+Selected 34 emotion-related ROIs from 109 total ROIs
+Selected 34 emotion-related ROIs from 233 total ROIs
+Selected 34 emotion-related ROIs from 493 total ROIs
+Selected 34 emotion-related ROIs from 399 total ROIs
+Selected 34 emotion-related ROIs from 109 total ROIs
+Selected 34 emotion-related ROIs from 404 total ROIs
+Selected 34 emotion-related ROIs from 388 total ROIs
+Selected 34 emotion-related ROIs from 109 total ROIs
+Selected 34 emotion-related ROIs from 140 total ROIs
+Selected 34 emotion-related ROIs from 109 total ROIs
+Selected 34 emotion-related ROIs from 448 total ROIs
+Selected 34 emotion-related ROIs from 110 total ROIs
+Selected 34 emotion-related ROIs from 244 total ROIs
+Selected 34 emotion-related ROIs from 342 total ROIs
+Selected 34 emotion-related ROIs from 230 total ROIs
+Selected 34 emotion-related ROIs from 166 total ROIs
+Selected 34 emotion-related ROIs from 581 total ROIs
+Selected 34 emotion-related ROIs from 181 total ROIs
+Selected 34 emotion-related ROIs from 109 total ROIs
+Selected 34 emotion-related ROIs from 471 total ROIs
+Selected 34 emotion-related ROIs from 110 total ROIs
+Selected 34 emotion-related ROIs from 109 total ROIs
+Selected 34 emotion-related ROIs from 109 total ROIs
+Selected 34 emotion-related ROIs from 110 total ROIs
+Selected 34 emotion-related ROIs from 472 total ROIs
+Selected 34 emotion-related ROIs from 566 total ROIs
+Selected 34 emotion-related ROIs from 110 total ROIs
+Selected 34 emotion-related ROIs from 110 total ROIs
+Selected 34 emotion-related ROIs from 109 total ROIs
+Selected 34 emotion-related ROIs from 589 total ROIs
+Selected 34 emotion-related ROIs from 110 total ROIs
+Selected 34 emotion-related ROIs from 503 total ROIs
+Selected 34 emotion-related ROIs from 258 total ROIs
+Selected 34 emotion-related ROIs from 220 total ROIs
+Selected 34 emotion-related ROIs from 365 total ROIs
+Selected 34 emotion-related ROIs from 184 total ROIs
+Selected 34 emotion-related ROIs from 109 total ROIs
+Selected 34 emotion-related ROIs from 543 total ROIs
+Selected 34 emotion-related ROIs from 109 total ROIs
+Selected 34 emotion-related ROIs from 218 total ROIs
+Selected 34 emotion-related ROIs from 144 total ROIs
+Selected 34 emotion-related ROIs from 109 total ROIs
+Selected 34 emotion-related ROIs from 167 total ROIs
+Selected 34 emotion-related ROIs from 569 total ROIs
+Selected 34 emotion-related ROIs from 428 total ROIs
+Selected 34 emotion-related ROIs from 458 total ROIs
+Selected 34 emotion-related ROIs from 109 total ROIs
+Selected 34 emotion-related ROIs from 109 total ROIs
+Selected 34 emotion-related ROIs from 109 total ROIs
+Selected 34 emotion-related ROIs from 110 total ROIs
+Selected 34 emotion-related ROIs from 159 total ROIs
+Selected 34 emotion-related ROIs from 109 total ROIs
+Selected 34 emotion-related ROIs from 109 total ROIs
+Selected 34 emotion-related ROIs from 221 total ROIs
+Selected 34 emotion-related ROIs from 420 total ROIs
+Selected 34 emotion-related ROIs from 424 total ROIs
+Selected 34 emotion-related ROIs from 188 total ROIs
+Selected 34 emotion-related ROIs from 110 total ROIs
+Selected 34 emotion-related ROIs from 110 total ROIs
+Selected 34 emotion-related ROIs from 170 total ROIs
+Selected 34 emotion-related ROIs from 414 total ROIs
+Selected 34 emotion-related ROIs from 110 total ROIs
+Selected 34 emotion-related ROIs from 230 total ROIs
+Selected 34 emotion-related ROIs from 109 total ROIs
+Selected 34 emotion-related ROIs from 463 total ROIs
+Selected 34 emotion-related ROIs from 164 total ROIs
+Selected 34 emotion-related ROIs from 466 total ROIs
+Selected 34 emotion-related ROIs from 133 total ROIs
+Selected 34 emotion-related ROIs from 109 total ROIs
+Selected 34 emotion-related ROIs from 109 total ROIs
+Selected 34 emotion-related ROIs from 218 total ROIs
+Selected 34 emotion-related ROIs from 110 total ROIs
+Selected 34 emotion-related ROIs from 409 total ROIs
+Selected 34 emotion-related ROIs from 110 total ROIs
+Selected 34 emotion-related ROIs from 148 total ROIs
+Selected 34 emotion-related ROIs from 486 total ROIs
+Selected 34 emotion-related ROIs from 109 total ROIs
+Selected 34 emotion-related ROIs from 476 total ROIs
+Selected 34 emotion-related ROIs from 181 total ROIs
+Selected 34 emotion-related ROIs from 109 total ROIs
+Selected 34 emotion-related ROIs from 229 total ROIs
+Selected 34 emotion-related ROIs from 109 total ROIs
+Selected 34 emotion-related ROIs from 144 total ROIs
+Selected 34 emotion-related ROIs from 111 total ROIs
+Selected 34 emotion-related ROIs from 549 total ROIs
+Selected 34 emotion-related ROIs from 613 total ROIs
+Selected 34 emotion-related ROIs from 217 total ROIs
+Selected 34 emotion-related ROIs from 228 total ROIs
+Selected 34 emotion-related ROIs from 109 total ROIs
+Selected 34 emotion-related ROIs from 109 total ROIs
+Selected 34 emotion-related ROIs from 110 total ROIs
+Selected 34 emotion-related ROIs from 464 total ROIs
+Selected 34 emotion-related ROIs from 440 total ROIs
+Selected 34 emotion-related ROIs from 195 total ROIs
+Selected 34 emotion-related ROIs from 109 total ROIs
+Selected 34 emotion-related ROIs from 110 total ROIs
+Selected 34 emotion-related ROIs from 109 total ROIs
+Selected 34 emotion-related ROIs from 429 total ROIs
+Selected 34 emotion-related ROIs from 109 total ROIs
+Selected 34 emotion-related ROIs from 110 total ROIs
+Selected 34 emotion-related ROIs from 109 total ROIs
+Selected 34 emotion-related ROIs from 109 total ROIs
+Selected 34 emotion-related ROIs from 414 total ROIs
+Selected 34 emotion-related ROIs from 517 total ROIs
+Selected 34 emotion-related ROIs from 110 total ROIs
+Selected 34 emotion-related ROIs from 110 total ROIs
+Selected 34 emotion-related ROIs from 451 total ROIs
+Selected 34 emotion-related ROIs from 109 total ROIs
+Selected 34 emotion-related ROIs from 163 total ROIs
+Selected 34 emotion-related ROIs from 109 total ROIs
+Selected 34 emotion-related ROIs from 111 total ROIs
+Selected 34 emotion-related ROIs from 486 total ROIs
+Selected 34 emotion-related ROIs from 109 total ROIs
+Selected 34 emotion-related ROIs from 162 total ROIs
+Selected 34 emotion-related ROIs from 475 total ROIs
+Selected 34 emotion-related ROIs from 109 total ROIs
+Selected 34 emotion-related ROIs from 109 total ROIs
+Selected 34 emotion-related ROIs from 148 total ROIs
+Selected 34 emotion-related ROIs from 182 total ROIs
+Selected 34 emotion-related ROIs from 109 total ROIs
+Selected 34 emotion-related ROIs from 423 total ROIs
+Selected 34 emotion-related ROIs from 207 total ROIs
+Selected 34 emotion-related ROIs from 164 total ROIs
+Selected 34 emotion-related ROIs from 108 total ROIs
+Selected 34 emotion-related ROIs from 110 total ROIs
+Selected 34 emotion-related ROIs from 174 total ROIs
+Selected 34 emotion-related ROIs from 109 total ROIs
+Selected 34 emotion-related ROIs from 111 total ROIs
+Selected 34 emotion-related ROIs from 109 total ROIs
+Selected 34 emotion-related ROIs from 110 total ROIs
+Selected 34 emotion-related ROIs from 109 total ROIs
+Selected 34 emotion-related ROIs from 457 total ROIs
+Selected 34 emotion-related ROIs from 111 total ROIs
+Selected 34 emotion-related ROIs from 418 total ROIs
+Selected 34 emotion-related ROIs from 109 total ROIs
+Training data shape: X=(6898780, 34), Y=(6898780, 7)
+Number of ROI features: 34
+Training emotion models:   0%|          | 0/7 [00:00<?, ?it/s]Training emotion models:  14%|█▍        | 1/7 [06:48<40:51, 408.59s/it]Training emotion models:  29%|██▊       | 2/7 [13:25<33:28, 401.64s/it]Training emotion models:  43%|████▎     | 3/7 [20:46<27:59, 419.87s/it]Training emotion models:  57%|█████▋    | 4/7 [27:49<21:02, 420.88s/it]Training emotion models:  71%|███████▏  | 5/7 [34:37<13:52, 416.30s/it]Training emotion models:  86%|████████▌ | 6/7 [41:27<06:54, 414.02s/it]Training emotion models: 100%|██████████| 7/7 [47:52<00:00, 404.79s/it]Training emotion models: 100%|██████████| 7/7 [47:52<00:00, 410.42s/it]
+  Emotion 0: Best alpha=1000.0000, MSE=4.5301, MAE=1.4082
+  Emotion 1: Best alpha=1000.0000, MSE=1.5375, MAE=0.6841
+  Emotion 2: Best alpha=1000.0000, MSE=4.9234, MAE=1.2498
+  Emotion 3: Best alpha=1000.0000, MSE=11.6852, MAE=1.3360
+  Emotion 4: Best alpha=1000.0000, MSE=0.1726, MAE=0.3453
+  Emotion 5: Best alpha=1000.0000, MSE=2.0952, MAE=1.0982
+  Emotion 6: Best alpha=1000.0000, MSE=3.9151, MAE=1.2949
+
+Overall Training MSE: 4.1228
+Overall Training MAE: 1.0595
+
+[Step 5] Evaluating on validation set...
+
+=== Evaluating on valid set ===
+Loading ROI timeseries for 101 subjects...
+  0%|          | 0/101 [00:00<?, ?it/s]  2%|▏         | 2/101 [00:00<00:05, 17.16it/s]  4%|▍         | 4/101 [00:00<00:05, 16.71it/s]  8%|▊         | 8/101 [00:00<00:04, 20.88it/s] 14%|█▍        | 14/101 [00:00<00:02, 31.80it/s] 18%|█▊        | 18/101 [00:00<00:02, 28.08it/s] 22%|██▏       | 22/101 [00:00<00:02, 28.41it/s] 25%|██▍       | 25/101 [00:00<00:02, 27.89it/s] 28%|██▊       | 28/101 [00:01<00:02, 25.38it/s] 31%|███       | 31/101 [00:01<00:02, 25.31it/s] 35%|███▍      | 35/101 [00:01<00:02, 27.21it/s] 39%|███▊      | 39/101 [00:01<00:02, 25.28it/s] 43%|████▎     | 43/101 [00:01<00:02, 27.71it/s] 48%|████▊     | 48/101 [00:01<00:01, 32.89it/s] 52%|█████▏    | 53/101 [00:01<00:01, 33.95it/s] 57%|█████▋    | 58/101 [00:02<00:01, 33.15it/s] 61%|██████▏   | 62/101 [00:02<00:01, 33.39it/s] 65%|██████▌   | 66/101 [00:02<00:01, 28.58it/s] 69%|██████▉   | 70/101 [00:02<00:01, 29.40it/s] 74%|███████▍  | 75/101 [00:02<00:00, 31.99it/s] 78%|███████▊  | 79/101 [00:02<00:00, 30.70it/s] 83%|████████▎ | 84/101 [00:02<00:00, 34.93it/s] 87%|████████▋ | 88/101 [00:02<00:00, 36.14it/s] 91%|█████████ | 92/101 [00:03<00:00, 36.06it/s] 95%|█████████▌| 96/101 [00:03<00:00, 29.81it/s]100%|██████████| 101/101 [00:03<00:00, 33.71it/s]100%|██████████| 101/101 [00:03<00:00, 30.11it/s]
+Selected 34 emotion-related ROIs from 153 total ROIs
+Selected 34 emotion-related ROIs from 558 total ROIs
+Selected 34 emotion-related ROIs from 365 total ROIs
+Selected 34 emotion-related ROIs from 419 total ROIs
+Selected 34 emotion-related ROIs from 372 total ROIs
+Selected 34 emotion-related ROIs from 110 total ROIs
+Selected 34 emotion-related ROIs from 109 total ROIs
+Selected 34 emotion-related ROIs from 424 total ROIs
+Selected 34 emotion-related ROIs from 109 total ROIs
+Selected 34 emotion-related ROIs from 182 total ROIs
+Selected 34 emotion-related ROIs from 109 total ROIs
+Selected 34 emotion-related ROIs from 109 total ROIs
+Selected 34 emotion-related ROIs from 109 total ROIs
+Selected 34 emotion-related ROIs from 190 total ROIs
+Selected 34 emotion-related ROIs from 109 total ROIs
+Selected 34 emotion-related ROIs from 501 total ROIs
+Selected 34 emotion-related ROIs from 110 total ROIs
+Selected 34 emotion-related ROIs from 397 total ROIs
+Selected 34 emotion-related ROIs from 109 total ROIs
+Selected 34 emotion-related ROIs from 161 total ROIs
+Selected 34 emotion-related ROIs from 109 total ROIs
+Selected 34 emotion-related ROIs from 512 total ROIs
+Selected 34 emotion-related ROIs from 109 total ROIs
+Selected 34 emotion-related ROIs from 109 total ROIs
+Selected 34 emotion-related ROIs from 507 total ROIs
+Selected 34 emotion-related ROIs from 665 total ROIs
+Selected 34 emotion-related ROIs from 110 total ROIs
+Selected 34 emotion-related ROIs from 182 total ROIs
+Selected 34 emotion-related ROIs from 216 total ROIs
+Selected 34 emotion-related ROIs from 436 total ROIs
+Selected 34 emotion-related ROIs from 148 total ROIs
+Selected 34 emotion-related ROIs from 111 total ROIs
+Selected 34 emotion-related ROIs from 145 total ROIs
+Selected 34 emotion-related ROIs from 422 total ROIs
+Selected 34 emotion-related ROIs from 227 total ROIs
+Selected 34 emotion-related ROIs from 109 total ROIs
+Selected 34 emotion-related ROIs from 465 total ROIs
+Selected 34 emotion-related ROIs from 110 total ROIs
+Selected 34 emotion-related ROIs from 566 total ROIs
+Selected 34 emotion-related ROIs from 440 total ROIs
+Selected 34 emotion-related ROIs from 111 total ROIs
+Selected 34 emotion-related ROIs from 111 total ROIs
+Selected 34 emotion-related ROIs from 109 total ROIs
+Selected 34 emotion-related ROIs from 188 total ROIs
+Selected 34 emotion-related ROIs from 109 total ROIs
+Selected 34 emotion-related ROIs from 109 total ROIs
+Selected 34 emotion-related ROIs from 198 total ROIs
+Selected 34 emotion-related ROIs from 110 total ROIs
+Selected 34 emotion-related ROIs from 109 total ROIs
+Selected 34 emotion-related ROIs from 162 total ROIs
+Selected 34 emotion-related ROIs from 150 total ROIs
+Selected 34 emotion-related ROIs from 110 total ROIs
+Selected 34 emotion-related ROIs from 414 total ROIs
+Selected 34 emotion-related ROIs from 109 total ROIs
+Selected 34 emotion-related ROIs from 109 total ROIs
+Selected 34 emotion-related ROIs from 110 total ROIs
+Selected 34 emotion-related ROIs from 194 total ROIs
+Selected 34 emotion-related ROIs from 536 total ROIs
+Selected 34 emotion-related ROIs from 109 total ROIs
+Selected 34 emotion-related ROIs from 392 total ROIs
+Selected 34 emotion-related ROIs from 110 total ROIs
+Selected 34 emotion-related ROIs from 186 total ROIs
+Selected 34 emotion-related ROIs from 110 total ROIs
+Selected 34 emotion-related ROIs from 110 total ROIs
+Selected 34 emotion-related ROIs from 509 total ROIs
+Selected 34 emotion-related ROIs from 499 total ROIs
+Selected 34 emotion-related ROIs from 110 total ROIs
+Selected 34 emotion-related ROIs from 144 total ROIs
+Selected 34 emotion-related ROIs from 109 total ROIs
+Selected 34 emotion-related ROIs from 430 total ROIs
+Selected 34 emotion-related ROIs from 108 total ROIs
+Selected 34 emotion-related ROIs from 110 total ROIs
+Selected 34 emotion-related ROIs from 110 total ROIs
+Selected 34 emotion-related ROIs from 109 total ROIs
+Selected 34 emotion-related ROIs from 427 total ROIs
+Selected 34 emotion-related ROIs from 109 total ROIs
+Selected 34 emotion-related ROIs from 584 total ROIs
+Selected 34 emotion-related ROIs from 147 total ROIs
+Selected 34 emotion-related ROIs from 109 total ROIs
+Selected 34 emotion-related ROIs from 109 total ROIs
+Selected 34 emotion-related ROIs from 158 total ROIs
+Selected 34 emotion-related ROIs from 110 total ROIs
+Selected 34 emotion-related ROIs from 162 total ROIs
+Selected 34 emotion-related ROIs from 111 total ROIs
+Selected 34 emotion-related ROIs from 110 total ROIs
+Selected 34 emotion-related ROIs from 109 total ROIs
+Selected 34 emotion-related ROIs from 109 total ROIs
+Selected 34 emotion-related ROIs from 348 total ROIs
+Selected 34 emotion-related ROIs from 109 total ROIs
+Selected 34 emotion-related ROIs from 279 total ROIs
+Selected 34 emotion-related ROIs from 211 total ROIs
+Selected 34 emotion-related ROIs from 148 total ROIs
+Selected 34 emotion-related ROIs from 110 total ROIs
+Selected 34 emotion-related ROIs from 380 total ROIs
+Selected 34 emotion-related ROIs from 109 total ROIs
+Selected 34 emotion-related ROIs from 643 total ROIs
+Selected 34 emotion-related ROIs from 194 total ROIs
+Selected 34 emotion-related ROIs from 193 total ROIs
+Selected 34 emotion-related ROIs from 174 total ROIs
+Selected 34 emotion-related ROIs from 108 total ROIs
+Selected 34 emotion-related ROIs from 111 total ROIs
+valid data shape: X=(1463920, 34), Y=(1463920, 7)
+  Emotion 0: MSE=4.5274, MAE=1.4100, R2=0.0003, Corr=0.0176
+  Emotion 1: MSE=1.5367, MAE=0.6841, R2=0.0003, Corr=0.0184
+  Emotion 2: MSE=4.9170, MAE=1.2479, R2=0.0002, Corr=0.0139
+  Emotion 3: MSE=11.6930, MAE=1.3433, R2=0.0000, Corr=0.0073
+  Emotion 4: MSE=0.1726, MAE=0.3452, R2=0.0001, Corr=0.0107
+  Emotion 5: MSE=2.0946, MAE=1.0981, R2=0.0000, Corr=0.0076
+  Emotion 6: MSE=3.9167, MAE=1.2962, R2=0.0003, Corr=0.0187
+
+Overall valid MSE: 4.1226
+Overall valid MAE: 1.0607
+
+[Step 6] Evaluating on test set...
+
+=== Evaluating on test set ===
+Loading ROI timeseries for 103 subjects...
+  0%|          | 0/103 [00:00<?, ?it/s]  3%|▎         | 3/103 [00:00<00:04, 24.43it/s]  6%|▌         | 6/103 [00:00<00:04, 19.79it/s]  9%|▊         | 9/103 [00:00<00:04, 21.28it/s] 12%|█▏        | 12/103 [00:00<00:04, 21.75it/s] 16%|█▌        | 16/103 [00:00<00:03, 24.93it/s] 18%|█▊        | 19/103 [00:00<00:03, 22.52it/s] 22%|██▏       | 23/103 [00:00<00:03, 24.55it/s] 26%|██▌       | 27/103 [00:01<00:02, 26.70it/s] 30%|███       | 31/103 [00:01<00:02, 27.45it/s] 35%|███▍      | 36/103 [00:01<00:02, 29.78it/s] 40%|███▉      | 41/103 [00:01<00:01, 34.13it/s] 44%|████▎     | 45/103 [00:01<00:02, 26.76it/s] 47%|████▋     | 48/103 [00:01<00:02, 26.86it/s] 50%|████▉     | 51/103 [00:01<00:01, 27.13it/s] 52%|█████▏    | 54/103 [00:02<00:01, 27.15it/s] 58%|█████▊    | 60/103 [00:02<00:01, 35.41it/s] 65%|██████▌   | 67/103 [00:02<00:00, 43.22it/s] 70%|██████▉   | 72/103 [00:02<00:00, 33.68it/s] 74%|███████▍  | 76/103 [00:02<00:00, 31.06it/s] 78%|███████▊  | 80/103 [00:02<00:00, 31.66it/s] 82%|████████▏ | 84/103 [00:02<00:00, 28.54it/s] 85%|████████▌ | 88/103 [00:03<00:00, 24.56it/s] 89%|████████▉ | 92/103 [00:03<00:00, 26.61it/s] 92%|█████████▏| 95/103 [00:03<00:00, 24.79it/s] 95%|█████████▌| 98/103 [00:03<00:00, 25.58it/s] 98%|█████████▊| 101/103 [00:03<00:00, 26.14it/s]100%|██████████| 103/103 [00:03<00:00, 27.90it/s]
+Selected 34 emotion-related ROIs from 109 total ROIs
+Selected 34 emotion-related ROIs from 445 total ROIs
+Selected 34 emotion-related ROIs from 110 total ROIs
+Selected 34 emotion-related ROIs from 519 total ROIs
+Selected 34 emotion-related ROIs from 465 total ROIs
+Selected 34 emotion-related ROIs from 176 total ROIs
+Selected 34 emotion-related ROIs from 190 total ROIs
+Selected 34 emotion-related ROIs from 555 total ROIs
+Selected 34 emotion-related ROIs from 109 total ROIs
+Selected 34 emotion-related ROIs from 110 total ROIs
+Selected 34 emotion-related ROIs from 109 total ROIs
+Selected 34 emotion-related ROIs from 630 total ROIs
+Selected 34 emotion-related ROIs from 145 total ROIs
+Selected 34 emotion-related ROIs from 109 total ROIs
+Selected 34 emotion-related ROIs from 229 total ROIs
+Selected 34 emotion-related ROIs from 407 total ROIs
+Selected 34 emotion-related ROIs from 109 total ROIs
+Selected 34 emotion-related ROIs from 385 total ROIs
+Selected 34 emotion-related ROIs from 588 total ROIs
+Selected 34 emotion-related ROIs from 192 total ROIs
+Selected 34 emotion-related ROIs from 157 total ROIs
+Selected 34 emotion-related ROIs from 110 total ROIs
+Selected 34 emotion-related ROIs from 506 total ROIs
+Selected 34 emotion-related ROIs from 109 total ROIs
+Selected 34 emotion-related ROIs from 109 total ROIs
+Selected 34 emotion-related ROIs from 110 total ROIs
+Selected 34 emotion-related ROIs from 498 total ROIs
+Selected 34 emotion-related ROIs from 109 total ROIs
+Selected 34 emotion-related ROIs from 222 total ROIs
+Selected 34 emotion-related ROIs from 184 total ROIs
+Selected 34 emotion-related ROIs from 430 total ROIs
+Selected 34 emotion-related ROIs from 175 total ROIs
+Selected 34 emotion-related ROIs from 111 total ROIs
+Selected 34 emotion-related ROIs from 179 total ROIs
+Selected 34 emotion-related ROIs from 109 total ROIs
+Selected 34 emotion-related ROIs from 421 total ROIs
+Selected 34 emotion-related ROIs from 110 total ROIs
+Selected 34 emotion-related ROIs from 109 total ROIs
+Selected 34 emotion-related ROIs from 110 total ROIs
+Selected 34 emotion-related ROIs from 197 total ROIs
+Selected 34 emotion-related ROIs from 203 total ROIs
+Selected 34 emotion-related ROIs from 109 total ROIs
+Selected 34 emotion-related ROIs from 591 total ROIs
+Selected 34 emotion-related ROIs from 601 total ROIs
+Selected 34 emotion-related ROIs from 207 total ROIs
+Selected 34 emotion-related ROIs from 111 total ROIs
+Selected 34 emotion-related ROIs from 496 total ROIs
+Selected 34 emotion-related ROIs from 109 total ROIs
+Selected 34 emotion-related ROIs from 433 total ROIs
+Selected 34 emotion-related ROIs from 110 total ROIs
+Selected 34 emotion-related ROIs from 110 total ROIs
+Selected 34 emotion-related ROIs from 110 total ROIs
+Selected 34 emotion-related ROIs from 436 total ROIs
+Selected 34 emotion-related ROIs from 165 total ROIs
+Selected 34 emotion-related ROIs from 110 total ROIs
+Selected 34 emotion-related ROIs from 110 total ROIs
+Selected 34 emotion-related ROIs from 109 total ROIs
+Selected 34 emotion-related ROIs from 109 total ROIs
+Selected 34 emotion-related ROIs from 153 total ROIs
+Selected 34 emotion-related ROIs from 175 total ROIs
+Selected 34 emotion-related ROIs from 109 total ROIs
+Warning: 1 ROIs not found in data:
+  - ctx-lh-caudalanteriorcingulate
+Selected 33 emotion-related ROIs from 109 total ROIs
+Warning: Skipping sub-NDARKA085YRG - has 33 ROIs instead of 34
+Selected 34 emotion-related ROIs from 146 total ROIs
+Selected 34 emotion-related ROIs from 110 total ROIs
+Selected 34 emotion-related ROIs from 109 total ROIs
+Selected 34 emotion-related ROIs from 109 total ROIs
+Selected 34 emotion-related ROIs from 109 total ROIs
+Selected 34 emotion-related ROIs from 448 total ROIs
+Selected 34 emotion-related ROIs from 189 total ROIs
+Selected 34 emotion-related ROIs from 590 total ROIs
+Selected 34 emotion-related ROIs from 181 total ROIs
+Selected 34 emotion-related ROIs from 109 total ROIs
+Selected 34 emotion-related ROIs from 170 total ROIs
+Selected 34 emotion-related ROIs from 231 total ROIs
+Selected 34 emotion-related ROIs from 110 total ROIs
+Selected 34 emotion-related ROIs from 507 total ROIs
+Selected 34 emotion-related ROIs from 137 total ROIs
+Selected 34 emotion-related ROIs from 109 total ROIs
+Selected 34 emotion-related ROIs from 470 total ROIs
+Selected 34 emotion-related ROIs from 109 total ROIs
+Selected 34 emotion-related ROIs from 468 total ROIs
+Selected 34 emotion-related ROIs from 405 total ROIs
+Selected 34 emotion-related ROIs from 109 total ROIs
+Selected 34 emotion-related ROIs from 158 total ROIs
+Selected 34 emotion-related ROIs from 110 total ROIs
+Selected 34 emotion-related ROIs from 482 total ROIs
+Selected 34 emotion-related ROIs from 654 total ROIs
+Selected 34 emotion-related ROIs from 205 total ROIs
+Selected 34 emotion-related ROIs from 437 total ROIs
+Selected 34 emotion-related ROIs from 109 total ROIs
+Selected 34 emotion-related ROIs from 109 total ROIs
+Selected 34 emotion-related ROIs from 144 total ROIs
+Selected 34 emotion-related ROIs from 420 total ROIs
+Selected 34 emotion-related ROIs from 409 total ROIs
+Selected 34 emotion-related ROIs from 109 total ROIs
+Selected 34 emotion-related ROIs from 109 total ROIs
+Selected 34 emotion-related ROIs from 142 total ROIs
+Selected 34 emotion-related ROIs from 417 total ROIs
+Selected 34 emotion-related ROIs from 143 total ROIs
+Selected 34 emotion-related ROIs from 109 total ROIs
+Selected 34 emotion-related ROIs from 471 total ROIs
+Selected 34 emotion-related ROIs from 175 total ROIs
+Selected 34 emotion-related ROIs from 111 total ROIs
+test data shape: X=(1481780, 34), Y=(1481780, 7)
+  Emotion 0: MSE=4.5271, MAE=1.4074, R2=-0.0001, Corr=0.0115
+  Emotion 1: MSE=1.5348, MAE=0.6844, R2=-0.0001, Corr=0.0079
+  Emotion 2: MSE=4.9095, MAE=1.2461, R2=0.0000, Corr=0.0097
+  Emotion 3: MSE=11.6683, MAE=1.3382, R2=0.0000, Corr=0.0075
+  Emotion 4: MSE=0.1726, MAE=0.3456, R2=-0.0000, Corr=0.0037
+  Emotion 5: MSE=2.0927, MAE=1.0967, R2=0.0001, Corr=0.0105
+  Emotion 6: MSE=3.9124, MAE=1.2929, R2=0.0002, Corr=0.0175
+
+Overall test MSE: 4.1168
+Overall test MAE: 1.0588
+
+[Step 7] Saving results...
+Metrics saved to: ../output/glm_baseline/glm_metrics.json
+GLM model saved to ../output/glm_baseline/glm_model.pkl
+Configuration saved to: ../output/glm_baseline/glm_config.json
+
+================================================================================
+GLM Baseline Training Complete!
+================================================================================
+
+Final Results:
+  Train MSE: 4.1228
+  Train MAE: 1.0595
+  Valid MSE: 4.1226
+  Valid MAE: 1.0607
+  Test MSE:  4.1168
+  Test MAE:  1.0588
+
+Output directory: ../output/glm_baseline
+================================================================================
+GLM baseline training complete!
+Results saved to output/glm_baseline/

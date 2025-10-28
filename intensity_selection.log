@@ -1,0 +1,27 @@
+================================================================================
+Selecting high-intensity sequences for sub-NDARRL379BET
+Model: opr6oq97
+Top N per emotion: 15
+================================================================================
+
+[DEBUG] Sample metadata SUBJECT_IDs: ['sub-NDARYK164AEJ', 'sub-NDARFX083RCV', 'sub-NDARYF463RKF']
+[DEBUG] Sample data subject_ids: ['sub-NDARPF682GDC', 'sub-NDARFJ000DCY', 'sub-NDARHJ034LDM']
+[DEBUG] Total metadata subjects: 677
+[DEBUG] Total data subjects: 677
+Traceback (most recent call last):
+  File "/home/connectome/kimbo/.conda/envs/swiftio/lib/python3.9/site-packages/pytorch_lightning/utilities/parsing.py", line 290, in __getattr__
+    return self[key]
+KeyError: 'limit_training_samples'
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "/scratch/connectome/kimbo/SwiFT-IO-4-v9/SwiFT-IO/igmap/select_high_intensity_sequences.py", line 167, in <module>
+    selected = select_high_intensity_sequences(args.subject, ckpt_path, top_n=args.top_n)
+  File "/scratch/connectome/kimbo/SwiFT-IO-4-v9/SwiFT-IO/igmap/select_high_intensity_sequences.py", line 50, in select_high_intensity_sequences
+    data_module.setup(stage='test')
+  File "/scratch/connectome/kimbo/SwiFT-IO-4-v9/SwiFT-IO/src/module/utils/data_module.py", line 202, in setup
+    if self.hparams.limit_training_samples:
+  File "/home/connectome/kimbo/.conda/envs/swiftio/lib/python3.9/site-packages/pytorch_lightning/utilities/parsing.py", line 292, in __getattr__
+    raise AttributeError(f'Missing attribute "{key}"') from exp
+AttributeError: Missing attribute "limit_training_samples"

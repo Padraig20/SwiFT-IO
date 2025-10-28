@@ -1,0 +1,37 @@
+================================================================================
+SVR PCA Baseline Evaluation from Checkpoints
+================================================================================
+Checkpoint dir: output/svr_reduction_pca
+Dataset: HBN
+Split seed: 777
+
+[Step 1] Loading checkpoints...
+✓ Loaded PCA model
+  - n_components: 100
+  - variance explained: 0.9171
+✓ Loaded emotion 0 model
+✓ Loaded emotion 1 model
+✓ Loaded emotion 2 model
+✓ Loaded emotion 3 model
+✓ Loaded emotion 4 model
+✓ Loaded emotion 5 model
+✓ Loaded emotion 6 model
+
+[Step 2] Setting up data module...
+Traceback (most recent call last):
+  File "/home/connectome/kimbo/.conda/envs/swiftio/lib/python3.9/site-packages/pytorch_lightning/utilities/parsing.py", line 290, in __getattr__
+    return self[key]
+KeyError: 'with_voxel_norm'
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "/scratch/connectome/kimbo/SwiFT-IO-4-v9/SwiFT-IO/evaluate_svr_from_checkpoints.py", line 268, in <module>
+    main()
+  File "/scratch/connectome/kimbo/SwiFT-IO-4-v9/SwiFT-IO/evaluate_svr_from_checkpoints.py", line 206, in main
+    data_module.setup(stage='fit')
+  File "/scratch/connectome/kimbo/SwiFT-IO-4-v9/SwiFT-IO/src/module/utils/data_module.py", line 177, in setup
+    "with_voxel_norm": self.hparams.with_voxel_norm,
+  File "/home/connectome/kimbo/.conda/envs/swiftio/lib/python3.9/site-packages/pytorch_lightning/utilities/parsing.py", line 292, in __getattr__
+    raise AttributeError(f'Missing attribute "{key}"') from exp
+AttributeError: Missing attribute "with_voxel_norm"

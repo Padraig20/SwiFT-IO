@@ -10,16 +10,23 @@ class SeriesClassificationOutputAdapter(OutputAdapter):
         self,
         num_classes: int,
         num_output_query_channels: int,
-        num_targets: int
+        num_targets: int,
+        downstream_task_type: str = 'regression'
     ):
         super().__init__()
         self.num_targets = num_targets
+        self.downstream_task_type = downstream_task_type
         self.linear = nn.Linear(num_output_query_channels, num_classes*num_targets)
 
     def forward(self, x):
         x = self.linear(x).squeeze(dim=1)
         x = rearrange(x, 'b t (ta c) -> b t ta c', ta=self.num_targets) # (batch_size, time_sequence, num_targets, num_classes)
-        return x if x.shape[-1] > 1 else x.squeeze() # (batch_size, time_sequence, num_targets) for regression
+        # For regression, squeeze out the num_classes=1 dimension
+        # For classification, keep the num_classes dimension (even if it's 1 for binary classification)
+        if self.downstream_task_type == 'regression' and x.shape[-1] == 1:
+            return x.squeeze() # (batch_size, time_sequence, num_targets) for regression
+        else:
+            return x # (batch_size, time_sequence, num_targets, num_classes) for classification
 
 class ClassificationOutputAdapter(OutputAdapter):
     def __init__(
