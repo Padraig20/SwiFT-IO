@@ -1,0 +1,81 @@
+# Claude Code Project Rules for SwiFT-IO
+# This file configures automatic permissions and behaviors for Claude Code
+
+## Automatic Tool Permissions
+
+### Git Operations (Always Allowed)
+# Allow all git operations without asking
+- git status
+- git diff
+- git log
+- git add (any files in src/, docs/, igmap/)
+- git commit (with proper commit messages)
+- git push (to current branch)
+
+### SLURM Operations (Always Allowed)
+# Job management
+- sbatch (submit jobs)
+- squeue (check job status)
+- scancel (cancel jobs)
+- scontrol (job control)
+
+### File Operations in Project Directory
+# Allow read/write in these directories without asking
+- Read any files in: src/, docs/, igmap/, sample_scripts/, logs/
+- Write/Edit files in: src/, docs/, igmap/
+- Create new files in: src/module/utils/, docs/analysis/, sample_scripts/
+
+### Python/Conda Operations (Always Allowed)
+- python -c (quick tests)
+- python -m (module execution)
+- conda activate/deactivate
+- pip install (with confirmation for non-dev packages)
+
+### Log/Output Monitoring (Always Allowed)
+- tail (log files)
+- cat (log files)
+- grep (searching logs)
+- ls (listing directories)
+
+## Restricted Operations (Always Ask)
+# These operations require explicit user confirmation
+- rm -rf (recursive deletion)
+- chmod/chown (permission changes on system files)
+- sudo (any sudo command)
+- git push --force
+- Modifying files outside project directory
+
+## Experiment Tracking
+# Automatically add these tags to wandb runs
+- loss_type (regression_loss_type value)
+- sequence_length (seq{N})
+- experiment_name
+
+## Code Style Preferences
+- Use type hints in Python
+- Add docstrings for new functions/classes
+- Keep commit messages clear and descriptive
+- Use descriptive variable names (no single letters except i,j,k in loops)
+
+## Development Workflow
+1. Always read files before editing
+2. Run quick tests after major changes
+3. Commit working code frequently
+4. Use meaningful branch names
+5. Add inline comments for complex logic
+
+## Project-Specific Notes
+- Default node: node3 (node1 has issues)
+- Default epochs: 30 (for quick experiments)
+- Main branch: main
+- Current dev branch: kimbo-labserver-swiftv9
+- WandB project: moviefmri
+
+## Data Paths
+- fMRI data: /scratch/HBN/3.3.1.movieDM_MNI_to_TRs_smooth_znorm_241120
+- Logs: /scratch/connectome/kimbo/SwiFT-IO-4-v9/SwiFT-IO/logs/
+- Outputs: output/moviefmri/
+
+## Contact
+- User: kimbo
+- Project: SwiFT-IO emotion regression from fMRI
