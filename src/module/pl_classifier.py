@@ -26,7 +26,10 @@ import wandb
 import copy
 import pdb
 class LitClassifier(pl.LightningModule):
-    
+
+    # Emotion names for logging (matches data_module.py emotion order)
+    EMOTION_NAMES = ['Anger', 'Happy', 'Fear', 'Sad', 'Excited', 'Positive', 'Negative']
+
     def __init__(self,data_module, **kwargs):
         super().__init__()
         self.data_module = data_module  # Pickle 불가능한 객체는 직접 저장
@@ -298,16 +301,18 @@ class LitClassifier(pl.LightningModule):
                 if self.learnable_loss is not None:
                     loss = self.learnable_loss(logits, target)
 
-                    # Still log per-emotion MSE for monitoring
+                    # Still log per-emotion MSE for monitoring with emotion names
                     for i in range(E):
+                        emotion_name = self.EMOTION_NAMES[i] if i < len(self.EMOTION_NAMES) else f"emotion_{i}"
                         mse_i = F.mse_loss(logits[:, :, i], target[:, :, i])
-                        result_dict[f"{mode}_mse_emotion_{i}"] = mse_i
+                        result_dict[f"{mode}_mse_{emotion_name}"] = mse_i
                 else:
                     # Standard MSE loss (original behavior)
                     loss_list = []
                     for i in range(E):
+                        emotion_name = self.EMOTION_NAMES[i] if i < len(self.EMOTION_NAMES) else f"emotion_{i}"
                         mse_i = F.mse_loss(logits[:, :, i], target[:, :, i])
-                        result_dict[f"{mode}_mse_emotion_{i}"] = mse_i
+                        result_dict[f"{mode}_mse_{emotion_name}"] = mse_i
                         loss_list.append(mse_i)
                     loss = sum(loss_list) / E
             else:
@@ -438,9 +443,10 @@ class LitClassifier(pl.LightningModule):
                         print(f"[WARNING] Unique classes for emotion {i}: {np.unique(targets_np)}")
                         roc_auc_group = float('nan')  # Mark as undefined rather than guessing 0.5
 
-                    self.log(f"{mode_str}_acc_{i}", accuracy_group, sync_dist=True)
-                    self.log(f"{mode_str}_balacc_{i}", balanced_accuracy_group, sync_dist=True)
-                    self.log(f"{mode_str}_AUROC_{i}", roc_auc_group, sync_dist=True)
+                    emotion_name = self.EMOTION_NAMES[i] if i < len(self.EMOTION_NAMES) else f"emotion_{i}"
+                    self.log(f"{mode_str}_acc_{emotion_name}", accuracy_group, sync_dist=True)
+                    self.log(f"{mode_str}_balacc_{emotion_name}", balanced_accuracy_group, sync_dist=True)
+                    self.log(f"{mode_str}_AUROC_{emotion_name}", roc_auc_group, sync_dist=True)
                 
             self.log(f"{mode_str}_acc", accuracy, sync_dist=True)
             self.log(f"{mode_str}_balacc", balanced_accuracy, sync_dist=True)
@@ -478,14 +484,15 @@ class LitClassifier(pl.LightningModule):
                 subj_targets = subj_targets.view(-1, t ,self.hparams.num_targets) # (b, t*num_targets) -> (b, t, num_targets)
             
                 for i in range(self.hparams.num_targets):
+                    emotion_name = self.EMOTION_NAMES[i] if i < len(self.EMOTION_NAMES) else f"emotion_{i}"
                     logits_group = subj_avg_logits[..., i]  # Shape: [batch_size, temporal_size]
                     target_group = subj_targets[..., i]
-                
+
                     mse_group = F.mse_loss(logits_group, target_group)  # target is float
                     mae_group = F.l1_loss(logits_group, target_group)
-                
+
                     pearson_coef_group = pearson(logits_group.flatten(), target_group.flatten())
-                    r2_group = r2_score(logits_group.flatten(), target_group.flatten()) 
+                    r2_group = r2_score(logits_group.flatten(), target_group.flatten())
 
                     if self.hparams.label_scaling_method == 'standardization': # default
                         adjusted_mse_group = F.mse_loss(logits_group * self.scaler.scale_[0] + self.scaler.mean_[0], target_group * self.scaler.scale_[0] + self.scaler.mean_[0])
@@ -494,12 +501,12 @@ class LitClassifier(pl.LightningModule):
                         adjusted_mse_group = F.mse_loss(logits_group * (self.scaler.data_max_[0] - self.scaler.data_min_[0]) + self.scaler.data_min_[0], target_group * (self.scaler.data_max_[0] - self.scaler.data_min_[0]) + self.scaler.data_min_[0])
                         adjusted_mae_group = F.l1_loss(logits_group * (self.scaler.data_max_[0] - self.scaler.data_min_[0]) + self.scaler.data_min_[0], target_group * (self.scaler.data_max_[0] - self.scaler.data_min_[0]) + self.scaler.data_min_[0])
 
-                    self.log(f"{mode_str}_corrcoef_{i}", pearson_coef_group, sync_dist=True)
-                    self.log(f"{mode_str}_r2_score_{i}", r2_group, sync_dist=True)
-                    self.log(f"{mode_str}_mse_{i}", mse_group, sync_dist=True)
-                    self.log(f"{mode_str}_mae_{i}", mae_group, sync_dist=True)
-                    self.log(f"{mode_str}_adjusted_mse_{i}", adjusted_mse_group, sync_dist=True)
-                    self.log(f"{mode_str}_adjusted_mae_{i}", adjusted_mae_group, sync_dist=True)
+                    self.log(f"{mode_str}_corrcoef_{emotion_name}", pearson_coef_group, sync_dist=True)
+                    self.log(f"{mode_str}_r2_score_{emotion_name}", r2_group, sync_dist=True)
+                    self.log(f"{mode_str}_mse_{emotion_name}", mse_group, sync_dist=True)
+                    self.log(f"{mode_str}_mae_{emotion_name}", mae_group, sync_dist=True)
+                    self.log(f"{mode_str}_adjusted_mse_{emotion_name}", adjusted_mse_group, sync_dist=True)
+                    self.log(f"{mode_str}_adjusted_mae_{emotion_name}", adjusted_mae_group, sync_dist=True)
             
             self.log(f"{mode_str}_corrcoef", pearson_coef, sync_dist=True)
             self.log(f"{mode_str}_r2_score", r2, sync_dist=True)
@@ -685,10 +692,11 @@ class LitClassifier(pl.LightningModule):
                 print(f"Non-zero weights: {weights['nonzero_weights']}")
                 print(f"{'='*80}\n")
 
-                # Log to wandb
+                # Log to wandb with emotion names
                 for i in range(self.hparams.num_targets):
-                    self.log(f"weight_zero_{i}", weights['zero_weights'][i], sync_dist=True)
-                    self.log(f"weight_nonzero_{i}", weights['nonzero_weights'][i], sync_dist=True)
+                    emotion_name = self.EMOTION_NAMES[i] if i < len(self.EMOTION_NAMES) else f"emotion_{i}"
+                    self.log(f"weight_zero_{emotion_name}", weights['zero_weights'][i], sync_dist=True)
+                    self.log(f"weight_nonzero_{emotion_name}", weights['nonzero_weights'][i], sync_dist=True)
 
             elif isinstance(self.learnable_loss, UncertaintyWeightedMSE):
                 uncertainties = self.learnable_loss.get_uncertainties()
@@ -699,10 +707,11 @@ class LitClassifier(pl.LightningModule):
                 print(f"Sigmas (σ):    {uncertainties['sigmas']}")
                 print(f"{'='*80}\n")
 
-                # Log to wandb
+                # Log to wandb with emotion names
                 for i in range(self.hparams.num_targets):
-                    self.log(f"uncertainty_logvar_{i}", uncertainties['log_vars'][i], sync_dist=True)
-                    self.log(f"uncertainty_sigma_{i}", uncertainties['sigmas'][i], sync_dist=True)
+                    emotion_name = self.EMOTION_NAMES[i] if i < len(self.EMOTION_NAMES) else f"emotion_{i}"
+                    self.log(f"uncertainty_logvar_{emotion_name}", uncertainties['log_vars'][i], sync_dist=True)
+                    self.log(f"uncertainty_sigma_{emotion_name}", uncertainties['sigmas'][i], sync_dist=True)
 
         # Calculate optimal thresholds from validation set
         self._calculate_optimal_thresholds(subj_valid, total_out_valid)
