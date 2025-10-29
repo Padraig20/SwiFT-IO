@@ -39,6 +39,10 @@ def svc_베이스라인_학습(훈련_데이터, 라벨):
 ### Conda 환경
 - **환경명**: `swiftio` (❌ 절대 `swiftv9` 아님!)
 - **활성화**: `source /usr/anaconda3/etc/profile.d/conda.sh && conda activate swiftio`
+- **Python 실행 규칙**:
+  - ✅ 항상 `conda activate swiftio` 후 Python 실행
+  - ✅ Bash tool에서 Python 실행 시: `bash -c "source ~/.bashrc && conda activate swiftio && python script.py"`
+  - ❌ 절대 conda 환경 없이 `python` 직접 실행 금지
 
 ### SLURM 작업 제출 규칙
 1. **SVC/SVR 베이스라인**: node2 또는 node4 (CPU만 사용)
