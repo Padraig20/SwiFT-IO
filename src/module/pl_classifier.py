@@ -17,7 +17,12 @@ from argparse import ArgumentParser, ArgumentDefaultsHelpFormatter
 from .models.load_model import load_model
 from .utils.metrics import Metrics
 from .utils.lr_scheduler import CosineAnnealingWarmUpRestarts
-from .utils.learnable_losses import PerEmotionLearnableWeightedMSE, UncertaintyWeightedMSE
+from .utils.learnable_losses import (
+    PerEmotionLearnableWeightedMSE,
+    UncertaintyWeightedMSE,
+    FocalMSELoss,
+    WeightedFocalMSELoss
+)
 
 from einops import rearrange
 
@@ -129,7 +134,7 @@ class LitClassifier(pl.LightningModule):
             loss_type = self.hparams.get('regression_loss_type', 'mse')
             if loss_type == 'per_emotion_weighted':
                 print(f"\n{'='*80}")
-                print("Using Per-Emotion Learnable Weighted MSE Loss (Option 2)")
+                print("Using Per-Emotion Learnable Weighted MSE Loss")
                 print(f"{'='*80}\n")
                 self.learnable_loss = PerEmotionLearnableWeightedMSE(
                     num_emotions=self.hparams.num_targets,
@@ -138,11 +143,31 @@ class LitClassifier(pl.LightningModule):
                 )
             elif loss_type == 'uncertainty_weighted':
                 print(f"\n{'='*80}")
-                print("Using Uncertainty-based Weighted MSE Loss (Option 3)")
+                print("Using Uncertainty-based Weighted MSE Loss")
                 print(f"{'='*80}\n")
                 self.learnable_loss = UncertaintyWeightedMSE(
                     num_emotions=self.hparams.num_targets,
                     init_log_var=self.hparams.get('init_log_var', 0.0)
+                )
+            elif loss_type == 'focal_mse':
+                print(f"\n{'='*80}")
+                print("Using Focal MSE Loss")
+                print(f"  Gamma: {self.hparams.get('focal_gamma', 2.0)}")
+                print(f"{'='*80}\n")
+                self.learnable_loss = FocalMSELoss(
+                    gamma=self.hparams.get('focal_gamma', 2.0)
+                )
+            elif loss_type == 'weighted_focal_mse':
+                print(f"\n{'='*80}")
+                print("Using Weighted Focal MSE Loss")
+                print(f"  Gamma: {self.hparams.get('focal_gamma', 2.0)}")
+                print(f"  Zero weight: {self.hparams.get('zero_weight', 1.0)}")
+                print(f"  Non-zero weight: {self.hparams.get('nonzero_weight', 5.0)}")
+                print(f"{'='*80}\n")
+                self.learnable_loss = WeightedFocalMSELoss(
+                    gamma=self.hparams.get('focal_gamma', 2.0),
+                    zero_weight=self.hparams.get('zero_weight', 1.0),
+                    nonzero_weight=self.hparams.get('nonzero_weight', 5.0)
                 )
             else:
                 print(f"\nUsing standard MSE loss\n")
@@ -488,19 +513,104 @@ class LitClassifier(pl.LightningModule):
                     logits_group = subj_avg_logits[..., i]  # Shape: [batch_size, temporal_size]
                     target_group = subj_targets[..., i]
 
-                    mse_group = F.mse_loss(logits_group, target_group)  # target is float
-                    mae_group = F.l1_loss(logits_group, target_group)
+                    # Flatten for easier computation
+                    logits_flat = logits_group.flatten()
+                    target_flat = target_group.flatten()
 
-                    pearson_coef_group = pearson(logits_group.flatten(), target_group.flatten())
-                    r2_group = r2_score(logits_group.flatten(), target_group.flatten())
+                    # Overall metrics (original behavior)
+                    mse_group = F.mse_loss(logits_flat, target_flat)
+                    mae_group = F.l1_loss(logits_flat, target_flat)
+                    pearson_coef_group = pearson(logits_flat, target_flat)
+                    r2_group = r2_score(logits_flat, target_flat)
 
+                    # Adjusted metrics (original scale)
                     if self.hparams.label_scaling_method == 'standardization': # default
-                        adjusted_mse_group = F.mse_loss(logits_group * self.scaler.scale_[0] + self.scaler.mean_[0], target_group * self.scaler.scale_[0] + self.scaler.mean_[0])
-                        adjusted_mae_group = F.l1_loss(logits_group * self.scaler.scale_[0] + self.scaler.mean_[0], target_group * self.scaler.scale_[0] + self.scaler.mean_[0])
+                        adjusted_mse_group = F.mse_loss(logits_flat * self.scaler.scale_[0] + self.scaler.mean_[0], target_flat * self.scaler.scale_[0] + self.scaler.mean_[0])
+                        adjusted_mae_group = F.l1_loss(logits_flat * self.scaler.scale_[0] + self.scaler.mean_[0], target_flat * self.scaler.scale_[0] + self.scaler.mean_[0])
                     elif self.hparams.label_scaling_method == 'minmax':
-                        adjusted_mse_group = F.mse_loss(logits_group * (self.scaler.data_max_[0] - self.scaler.data_min_[0]) + self.scaler.data_min_[0], target_group * (self.scaler.data_max_[0] - self.scaler.data_min_[0]) + self.scaler.data_min_[0])
-                        adjusted_mae_group = F.l1_loss(logits_group * (self.scaler.data_max_[0] - self.scaler.data_min_[0]) + self.scaler.data_min_[0], target_group * (self.scaler.data_max_[0] - self.scaler.data_min_[0]) + self.scaler.data_min_[0])
+                        adjusted_mse_group = F.mse_loss(logits_flat * (self.scaler.data_max_[0] - self.scaler.data_min_[0]) + self.scaler.data_min_[0], target_flat * (self.scaler.data_max_[0] - self.scaler.data_min_[0]) + self.scaler.data_min_[0])
+                        adjusted_mae_group = F.l1_loss(logits_flat * (self.scaler.data_max_[0] - self.scaler.data_min_[0]) + self.scaler.data_min_[0], target_flat * (self.scaler.data_max_[0] - self.scaler.data_min_[0]) + self.scaler.data_min_[0])
 
+                    # ========================================================================
+                    # STRATIFIED METRICS: Non-zero and Zero samples (New!)
+                    # ========================================================================
+
+                    # Move to CPU/numpy for easier masking
+                    target_np = target_flat.cpu().numpy()
+                    logits_np = logits_flat.cpu().numpy()
+
+                    # Create masks
+                    mask_zero = (target_np == 0)
+                    mask_nonzero = ~mask_zero
+
+                    n_total = len(target_np)
+                    n_zero = mask_zero.sum()
+                    n_nonzero = mask_nonzero.sum()
+
+                    # Log sample counts
+                    self.log(f"{mode_str}_n_total_{emotion_name}", float(n_total), sync_dist=True)
+                    self.log(f"{mode_str}_n_zero_{emotion_name}", float(n_zero), sync_dist=True)
+                    self.log(f"{mode_str}_n_nonzero_{emotion_name}", float(n_nonzero), sync_dist=True)
+                    self.log(f"{mode_str}_pct_zero_{emotion_name}", float(n_zero / n_total * 100) if n_total > 0 else 0.0, sync_dist=True)
+
+                    # Non-zero metrics (핵심!)
+                    if n_nonzero > 1:
+                        target_nonzero = target_flat[torch.from_numpy(mask_nonzero)]
+                        logits_nonzero = logits_flat[torch.from_numpy(mask_nonzero)]
+
+                        # Non-zero MAE, MSE, RMSE
+                        nonzero_mae = F.l1_loss(logits_nonzero, target_nonzero)
+                        nonzero_mse = F.mse_loss(logits_nonzero, target_nonzero)
+                        nonzero_rmse = torch.sqrt(nonzero_mse)
+
+                        # Non-zero Pearson correlation
+                        nonzero_pearson = pearson(logits_nonzero, target_nonzero)
+
+                        # Adjusted non-zero metrics (original scale)
+                        if self.hparams.label_scaling_method == 'standardization':
+                            logits_nonzero_adj = logits_nonzero * self.scaler.scale_[0] + self.scaler.mean_[0]
+                            target_nonzero_adj = target_nonzero * self.scaler.scale_[0] + self.scaler.mean_[0]
+                        elif self.hparams.label_scaling_method == 'minmax':
+                            logits_nonzero_adj = logits_nonzero * (self.scaler.data_max_[0] - self.scaler.data_min_[0]) + self.scaler.data_min_[0]
+                            target_nonzero_adj = target_nonzero * (self.scaler.data_max_[0] - self.scaler.data_min_[0]) + self.scaler.data_min_[0]
+
+                        nonzero_adjusted_mae = F.l1_loss(logits_nonzero_adj, target_nonzero_adj)
+                        nonzero_adjusted_rmse = torch.sqrt(F.mse_loss(logits_nonzero_adj, target_nonzero_adj))
+
+                        # Log non-zero metrics
+                        self.log(f"{mode_str}_nonzero_mae_{emotion_name}", nonzero_mae, sync_dist=True)
+                        self.log(f"{mode_str}_nonzero_mse_{emotion_name}", nonzero_mse, sync_dist=True)
+                        self.log(f"{mode_str}_nonzero_rmse_{emotion_name}", nonzero_rmse, sync_dist=True)
+                        self.log(f"{mode_str}_nonzero_pearson_{emotion_name}", nonzero_pearson, sync_dist=True)
+                        self.log(f"{mode_str}_nonzero_adjusted_mae_{emotion_name}", nonzero_adjusted_mae, sync_dist=True)
+                        self.log(f"{mode_str}_nonzero_adjusted_rmse_{emotion_name}", nonzero_adjusted_rmse, sync_dist=True)
+
+                    # Zero metrics
+                    if n_zero > 0:
+                        logits_zero = logits_flat[torch.from_numpy(mask_zero)]
+
+                        # Zero MAE (how close to 0 are predictions on zero targets)
+                        zero_mae = torch.abs(logits_zero).mean()
+                        zero_mean_pred = logits_zero.mean()
+                        zero_std_pred = logits_zero.std()
+
+                        # Adjusted zero metrics (original scale)
+                        if self.hparams.label_scaling_method == 'standardization':
+                            logits_zero_adj = logits_zero * self.scaler.scale_[0] + self.scaler.mean_[0]
+                        elif self.hparams.label_scaling_method == 'minmax':
+                            logits_zero_adj = logits_zero * (self.scaler.data_max_[0] - self.scaler.data_min_[0]) + self.scaler.data_min_[0]
+
+                        zero_adjusted_mae = torch.abs(logits_zero_adj).mean()
+
+                        # Log zero metrics
+                        self.log(f"{mode_str}_zero_mae_{emotion_name}", zero_mae, sync_dist=True)
+                        self.log(f"{mode_str}_zero_mean_pred_{emotion_name}", zero_mean_pred, sync_dist=True)
+                        self.log(f"{mode_str}_zero_std_pred_{emotion_name}", zero_std_pred, sync_dist=True)
+                        self.log(f"{mode_str}_zero_adjusted_mae_{emotion_name}", zero_adjusted_mae, sync_dist=True)
+
+                    # ========================================================================
+                    # Log original overall metrics (for backward compatibility)
+                    # ========================================================================
                     self.log(f"{mode_str}_corrcoef_{emotion_name}", pearson_coef_group, sync_dist=True)
                     self.log(f"{mode_str}_r2_score_{emotion_name}", r2_group, sync_dist=True)
                     self.log(f"{mode_str}_mse_{emotion_name}", mse_group, sync_dist=True)
@@ -681,6 +791,63 @@ class LitClassifier(pl.LightningModule):
         # evaluate
         self._evaluate_metrics(subj_valid, total_out_valid, mode="valid")
 
+        # ========================================================================
+        # Log summary metrics (average across emotions) for regression tasks
+        # ========================================================================
+        if self.hparams.downstream_task_type == 'regression' and self.hparams.decoder in ['series_decoder', 'lstm_series_regression_head']:
+            # Collect non-zero metrics from trainer's callback_metrics
+            nonzero_maes = []
+            nonzero_pearsons = []
+            nonzero_rmses = []
+
+            for i in range(self.hparams.num_targets):
+                emotion_name = self.EMOTION_NAMES[i] if i < len(self.EMOTION_NAMES) else f"emotion_{i}"
+
+                # Try to get metrics from logged values (they might be in callback_metrics)
+                nonzero_mae_key = f"valid_nonzero_mae_{emotion_name}"
+                nonzero_pearson_key = f"valid_nonzero_pearson_{emotion_name}"
+                nonzero_rmse_key = f"valid_nonzero_rmse_{emotion_name}"
+
+                # Use trainer's callback_metrics if available
+                if hasattr(self.trainer, 'callback_metrics'):
+                    if nonzero_mae_key in self.trainer.callback_metrics:
+                        nonzero_maes.append(self.trainer.callback_metrics[nonzero_mae_key].item())
+                    if nonzero_pearson_key in self.trainer.callback_metrics:
+                        nonzero_pearsons.append(self.trainer.callback_metrics[nonzero_pearson_key].item())
+                    if nonzero_rmse_key in self.trainer.callback_metrics:
+                        nonzero_rmses.append(self.trainer.callback_metrics[nonzero_rmse_key].item())
+
+            # Log average metrics
+            if len(nonzero_maes) > 0:
+                avg_nonzero_mae = np.mean(nonzero_maes)
+                std_nonzero_mae = np.std(nonzero_maes)
+                self.log("valid_avg_nonzero_mae", avg_nonzero_mae, sync_dist=True)
+                self.log("valid_std_nonzero_mae", std_nonzero_mae, sync_dist=True)
+
+            if len(nonzero_pearsons) > 0:
+                avg_nonzero_pearson = np.mean(nonzero_pearsons)
+                std_nonzero_pearson = np.std(nonzero_pearsons)
+                self.log("valid_avg_nonzero_pearson", avg_nonzero_pearson, sync_dist=True)
+                self.log("valid_std_nonzero_pearson", std_nonzero_pearson, sync_dist=True)
+
+            if len(nonzero_rmses) > 0:
+                avg_nonzero_rmse = np.mean(nonzero_rmses)
+                std_nonzero_rmse = np.std(nonzero_rmses)
+                self.log("valid_avg_nonzero_rmse", avg_nonzero_rmse, sync_dist=True)
+                self.log("valid_std_nonzero_rmse", std_nonzero_rmse, sync_dist=True)
+
+            # Print summary if on global rank 0
+            if self.trainer.is_global_zero and len(nonzero_maes) > 0:
+                print(f"\n{'='*80}")
+                print("STRATIFIED METRICS SUMMARY (Validation)")
+                print(f"{'='*80}")
+                print(f"Avg Non-zero MAE:     {avg_nonzero_mae:.4f} ± {std_nonzero_mae:.4f}")
+                if len(nonzero_pearsons) > 0:
+                    print(f"Avg Non-zero Pearson: {avg_nonzero_pearson:.4f} ± {std_nonzero_pearson:.4f}")
+                if len(nonzero_rmses) > 0:
+                    print(f"Avg Non-zero RMSE:    {avg_nonzero_rmse:.4f} ± {std_nonzero_rmse:.4f}")
+                print(f"{'='*80}\n")
+
         # Log learnable loss weights/uncertainties
         if self.learnable_loss is not None and self.trainer.is_global_zero:
             if isinstance(self.learnable_loss, PerEmotionLearnableWeightedMSE):
@@ -718,6 +885,63 @@ class LitClassifier(pl.LightningModule):
 
         if not self.valid_only:
             self._evaluate_metrics(subj_test, total_out_test, mode="test")
+
+            # ========================================================================
+            # Log summary metrics for test set (average across emotions)
+            # ========================================================================
+            if self.hparams.downstream_task_type == 'regression' and self.hparams.decoder in ['series_decoder', 'lstm_series_regression_head']:
+                # Collect non-zero metrics from trainer's callback_metrics
+                nonzero_maes = []
+                nonzero_pearsons = []
+                nonzero_rmses = []
+
+                for i in range(self.hparams.num_targets):
+                    emotion_name = self.EMOTION_NAMES[i] if i < len(self.EMOTION_NAMES) else f"emotion_{i}"
+
+                    # Try to get metrics from logged values
+                    nonzero_mae_key = f"test_nonzero_mae_{emotion_name}"
+                    nonzero_pearson_key = f"test_nonzero_pearson_{emotion_name}"
+                    nonzero_rmse_key = f"test_nonzero_rmse_{emotion_name}"
+
+                    # Use trainer's callback_metrics if available
+                    if hasattr(self.trainer, 'callback_metrics'):
+                        if nonzero_mae_key in self.trainer.callback_metrics:
+                            nonzero_maes.append(self.trainer.callback_metrics[nonzero_mae_key].item())
+                        if nonzero_pearson_key in self.trainer.callback_metrics:
+                            nonzero_pearsons.append(self.trainer.callback_metrics[nonzero_pearson_key].item())
+                        if nonzero_rmse_key in self.trainer.callback_metrics:
+                            nonzero_rmses.append(self.trainer.callback_metrics[nonzero_rmse_key].item())
+
+                # Log average metrics
+                if len(nonzero_maes) > 0:
+                    avg_nonzero_mae = np.mean(nonzero_maes)
+                    std_nonzero_mae = np.std(nonzero_maes)
+                    self.log("test_avg_nonzero_mae", avg_nonzero_mae, sync_dist=True)
+                    self.log("test_std_nonzero_mae", std_nonzero_mae, sync_dist=True)
+
+                if len(nonzero_pearsons) > 0:
+                    avg_nonzero_pearson = np.mean(nonzero_pearsons)
+                    std_nonzero_pearson = np.std(nonzero_pearsons)
+                    self.log("test_avg_nonzero_pearson", avg_nonzero_pearson, sync_dist=True)
+                    self.log("test_std_nonzero_pearson", std_nonzero_pearson, sync_dist=True)
+
+                if len(nonzero_rmses) > 0:
+                    avg_nonzero_rmse = np.mean(nonzero_rmses)
+                    std_nonzero_rmse = np.std(nonzero_rmses)
+                    self.log("test_avg_nonzero_rmse", avg_nonzero_rmse, sync_dist=True)
+                    self.log("test_std_nonzero_rmse", std_nonzero_rmse, sync_dist=True)
+
+                # Print summary if on global rank 0
+                if self.trainer.is_global_zero and len(nonzero_maes) > 0:
+                    print(f"\n{'='*80}")
+                    print("STRATIFIED METRICS SUMMARY (Test)")
+                    print(f"{'='*80}")
+                    print(f"Avg Non-zero MAE:     {avg_nonzero_mae:.4f} ± {std_nonzero_mae:.4f}")
+                    if len(nonzero_pearsons) > 0:
+                        print(f"Avg Non-zero Pearson: {avg_nonzero_pearson:.4f} ± {std_nonzero_pearson:.4f}")
+                    if len(nonzero_rmses) > 0:
+                        print(f"Avg Non-zero RMSE:    {avg_nonzero_rmse:.4f} ± {std_nonzero_rmse:.4f}")
+                    print(f"{'='*80}\n")
             
     # If you use loggers other than Neptune you may need to modify this
     def _save_predictions(self,total_subjs,total_out, mode):
@@ -789,8 +1013,65 @@ class LitClassifier(pl.LightningModule):
 
         subj_test = np.array(subj_test)
         total_out_test = [item for sublist in out_test_list for item in sublist]
-                    
+
         self._evaluate_metrics(subj_test, total_out_test, mode="test")
+
+        # ========================================================================
+        # Log summary metrics for test set (average across emotions)
+        # ========================================================================
+        if self.hparams.downstream_task_type == 'regression' and self.hparams.decoder in ['series_decoder', 'lstm_series_regression_head']:
+            # Collect non-zero metrics from trainer's callback_metrics
+            nonzero_maes = []
+            nonzero_pearsons = []
+            nonzero_rmses = []
+
+            for i in range(self.hparams.num_targets):
+                emotion_name = self.EMOTION_NAMES[i] if i < len(self.EMOTION_NAMES) else f"emotion_{i}"
+
+                # Try to get metrics from logged values
+                nonzero_mae_key = f"test_nonzero_mae_{emotion_name}"
+                nonzero_pearson_key = f"test_nonzero_pearson_{emotion_name}"
+                nonzero_rmse_key = f"test_nonzero_rmse_{emotion_name}"
+
+                # Use trainer's callback_metrics if available
+                if hasattr(self.trainer, 'callback_metrics'):
+                    if nonzero_mae_key in self.trainer.callback_metrics:
+                        nonzero_maes.append(self.trainer.callback_metrics[nonzero_mae_key].item())
+                    if nonzero_pearson_key in self.trainer.callback_metrics:
+                        nonzero_pearsons.append(self.trainer.callback_metrics[nonzero_pearson_key].item())
+                    if nonzero_rmse_key in self.trainer.callback_metrics:
+                        nonzero_rmses.append(self.trainer.callback_metrics[nonzero_rmse_key].item())
+
+            # Log average metrics
+            if len(nonzero_maes) > 0:
+                avg_nonzero_mae = np.mean(nonzero_maes)
+                std_nonzero_mae = np.std(nonzero_maes)
+                self.log("test_avg_nonzero_mae", avg_nonzero_mae, sync_dist=True)
+                self.log("test_std_nonzero_mae", std_nonzero_mae, sync_dist=True)
+
+            if len(nonzero_pearsons) > 0:
+                avg_nonzero_pearson = np.mean(nonzero_pearsons)
+                std_nonzero_pearson = np.std(nonzero_pearsons)
+                self.log("test_avg_nonzero_pearson", avg_nonzero_pearson, sync_dist=True)
+                self.log("test_std_nonzero_pearson", std_nonzero_pearson, sync_dist=True)
+
+            if len(nonzero_rmses) > 0:
+                avg_nonzero_rmse = np.mean(nonzero_rmses)
+                std_nonzero_rmse = np.std(nonzero_rmses)
+                self.log("test_avg_nonzero_rmse", avg_nonzero_rmse, sync_dist=True)
+                self.log("test_std_nonzero_rmse", std_nonzero_rmse, sync_dist=True)
+
+            # Print summary if on global rank 0
+            if self.trainer.is_global_zero and len(nonzero_maes) > 0:
+                print(f"\n{'='*80}")
+                print("STRATIFIED METRICS SUMMARY (Test - Final)")
+                print(f"{'='*80}")
+                print(f"Avg Non-zero MAE:     {avg_nonzero_mae:.4f} ± {std_nonzero_mae:.4f}")
+                if len(nonzero_pearsons) > 0:
+                    print(f"Avg Non-zero Pearson: {avg_nonzero_pearson:.4f} ± {std_nonzero_pearson:.4f}")
+                if len(nonzero_rmses) > 0:
+                    print(f"Avg Non-zero RMSE:    {avg_nonzero_rmse:.4f} ± {std_nonzero_rmse:.4f}")
+                print(f"{'='*80}\n")
     
     def on_train_epoch_start(self) -> None:
         """
@@ -934,13 +1215,19 @@ class LitClassifier(pl.LightningModule):
 
         # learnable loss related (for regression)
         group.add_argument("--regression_loss_type", type=str, default="mse",
-                          choices=["mse", "per_emotion_weighted", "uncertainty_weighted"],
-                          help="Loss function type for regression: 'mse' (standard), 'per_emotion_weighted' (Option 2: learnable weights for zero/non-zero), 'uncertainty_weighted' (Option 3: uncertainty-based weighting)")
+                          choices=["mse", "per_emotion_weighted", "uncertainty_weighted", "focal_mse", "weighted_focal_mse"],
+                          help="Loss function type for regression: 'mse' (standard), 'per_emotion_weighted' (learnable weights for zero/non-zero), 'uncertainty_weighted' (uncertainty-based weighting), 'focal_mse' (focal loss for hard samples), 'weighted_focal_mse' (focal + zero/non-zero weighting)")
         group.add_argument("--init_zero_weight", type=float, default=0.1,
                           help="Initial weight for zero values in per_emotion_weighted loss (default: 0.1)")
         group.add_argument("--init_nonzero_weight", type=float, default=5.0,
                           help="Initial weight for non-zero values in per_emotion_weighted loss (default: 5.0)")
         group.add_argument("--init_log_var", type=float, default=0.0,
                           help="Initial log variance for uncertainty_weighted loss (default: 0.0, i.e., variance=1.0)")
+        group.add_argument("--focal_gamma", type=float, default=2.0,
+                          help="Gamma parameter for focal losses (default: 2.0). Higher gamma = more focus on hard samples")
+        group.add_argument("--zero_weight", type=float, default=1.0,
+                          help="Weight for zero targets in weighted_focal_mse loss (default: 1.0)")
+        group.add_argument("--nonzero_weight", type=float, default=5.0,
+                          help="Weight for non-zero targets in weighted_focal_mse loss (default: 5.0)")
 
         return parser

@@ -188,6 +188,149 @@ class UncertaintyWeightedMSE(nn.Module):
         }
 
 
+class FocalMSELoss(nn.Module):
+    """
+    Focal MSE Loss for Sparse Regression
+
+    Applies focal weighting to MSE loss to emphasize hard samples (large errors).
+    This helps the model focus on difficult predictions (non-zero emotion events)
+    rather than easy predictions (zero values).
+
+    The focal weight is: (1 + mse)^gamma
+    - gamma > 1: Exponentially increases weight for larger errors
+    - gamma = 0: Reduces to standard MSE
+
+    Reference:
+    - Inspired by Focal Loss (Lin et al., ICCV 2017) for classification
+    - Adapted for regression tasks with continuous targets
+
+    Args:
+        gamma (float): Focusing parameter (default: 2.0)
+                      Higher gamma = more focus on hard samples
+        reduction (str): 'mean' or 'sum' or 'none' (default: 'mean')
+
+    Example:
+        >>> loss_fn = FocalMSELoss(gamma=2.0)
+        >>> pred = torch.randn(32, 20, 7)  # (batch, time, emotions)
+        >>> target = torch.randn(32, 20, 7)
+        >>> loss = loss_fn(pred, target)
+    """
+
+    def __init__(self, gamma=2.0, reduction='mean'):
+        super().__init__()
+        self.gamma = gamma
+        self.reduction = reduction
+
+    def forward(self, pred, target):
+        """
+        Compute focal MSE loss
+
+        Args:
+            pred: Predictions, shape (batch, seq_len, num_emotions) or (batch, num_emotions)
+            target: Ground truth, same shape as pred
+
+        Returns:
+            Scalar loss value (if reduction='mean')
+        """
+        # Compute MSE per sample
+        mse = (pred - target) ** 2
+
+        # Apply focal weight: larger errors get exponentially larger weights
+        focal_weight = (1.0 + mse) ** self.gamma
+
+        # Weighted MSE
+        focal_mse = focal_weight * mse
+
+        # Reduction
+        if self.reduction == 'mean':
+            return focal_mse.mean()
+        elif self.reduction == 'sum':
+            return focal_mse.sum()
+        elif self.reduction == 'none':
+            return focal_mse
+        else:
+            raise ValueError(f"Invalid reduction: {self.reduction}")
+
+    def __repr__(self):
+        return f"FocalMSELoss(gamma={self.gamma}, reduction='{self.reduction}')"
+
+
+class WeightedFocalMSELoss(nn.Module):
+    """
+    Weighted Focal MSE Loss combining focal weighting with zero/non-zero weighting
+
+    Applies two types of weighting:
+    1. Focal weight: (1 + mse)^gamma - emphasizes hard samples
+    2. Sample weight: Higher weight for non-zero targets
+
+    This is particularly effective for zero-inflated regression where we want to:
+    - Focus on large errors (focal)
+    - Focus on non-zero samples (sample weight)
+
+    Args:
+        gamma (float): Focal parameter (default: 2.0)
+        zero_weight (float): Weight for zero targets (default: 1.0)
+        nonzero_weight (float): Weight for non-zero targets (default: 5.0)
+        reduction (str): 'mean' or 'sum' or 'none' (default: 'mean')
+
+    Example:
+        >>> loss_fn = WeightedFocalMSELoss(gamma=2.0, nonzero_weight=5.0)
+        >>> pred = torch.randn(32, 20, 7)
+        >>> target = torch.randn(32, 20, 7)
+        >>> loss = loss_fn(pred, target)
+    """
+
+    def __init__(self, gamma=2.0, zero_weight=1.0, nonzero_weight=5.0, reduction='mean'):
+        super().__init__()
+        self.gamma = gamma
+        self.zero_weight = zero_weight
+        self.nonzero_weight = nonzero_weight
+        self.reduction = reduction
+
+    def forward(self, pred, target):
+        """
+        Compute weighted focal MSE loss
+
+        Args:
+            pred: Predictions, shape (batch, seq_len, num_emotions) or (batch, num_emotions)
+            target: Ground truth, same shape as pred
+
+        Returns:
+            Scalar loss value (if reduction='mean')
+        """
+        # Compute MSE per sample
+        mse = (pred - target) ** 2
+
+        # Apply focal weight
+        focal_weight = (1.0 + mse) ** self.gamma
+
+        # Apply zero/non-zero weight
+        sample_weight = torch.where(
+            target != 0,
+            torch.tensor(self.nonzero_weight, device=target.device, dtype=target.dtype),
+            torch.tensor(self.zero_weight, device=target.device, dtype=target.dtype)
+        )
+
+        # Combined weighting
+        weighted_focal_mse = focal_weight * sample_weight * mse
+
+        # Reduction
+        if self.reduction == 'mean':
+            return weighted_focal_mse.mean()
+        elif self.reduction == 'sum':
+            return weighted_focal_mse.sum()
+        elif self.reduction == 'none':
+            return weighted_focal_mse
+        else:
+            raise ValueError(f"Invalid reduction: {self.reduction}")
+
+    def __repr__(self):
+        return (f"WeightedFocalMSELoss(gamma={self.gamma}, "
+                f"zero_weight={self.zero_weight}, "
+                f"nonzero_weight={self.nonzero_weight}, "
+                f"reduction='{self.reduction}')")
+
+
 # Example usage and testing
 if __name__ == "__main__":
     print("="*80)
@@ -225,6 +368,24 @@ if __name__ == "__main__":
     print(f"Loss: {loss_3.item():.4f}")
     print(f"Initial uncertainties: {loss_fn_3.get_uncertainties()}")
 
+    # Test Focal MSE Loss
+    print("\n" + "-"*80)
+    print("Focal MSE Loss")
+    print("-"*80)
+    loss_fn_focal = FocalMSELoss(gamma=2.0)
+    loss_focal = loss_fn_focal(pred, target)
+    print(f"Loss: {loss_focal.item():.4f}")
+    print(f"Gamma: {loss_fn_focal.gamma}")
+
+    # Test Weighted Focal MSE Loss
+    print("\n" + "-"*80)
+    print("Weighted Focal MSE Loss")
+    print("-"*80)
+    loss_fn_wfocal = WeightedFocalMSELoss(gamma=2.0, nonzero_weight=5.0)
+    loss_wfocal = loss_fn_wfocal(pred, target)
+    print(f"Loss: {loss_wfocal.item():.4f}")
+    print(f"Gamma: {loss_fn_wfocal.gamma}, Nonzero weight: {loss_fn_wfocal.nonzero_weight}")
+
     # Test backward pass
     print("\n" + "-"*80)
     print("Testing backward pass")
@@ -234,6 +395,12 @@ if __name__ == "__main__":
 
     loss_3.backward()
     print(f"✓ Option 3 backward pass successful")
+
+    loss_focal.backward()
+    print(f"✓ Focal MSE backward pass successful")
+
+    loss_wfocal.backward()
+    print(f"✓ Weighted Focal MSE backward pass successful")
 
     print("\n" + "="*80)
     print("All tests passed!")
