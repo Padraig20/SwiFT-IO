@@ -17,6 +17,7 @@ from argparse import ArgumentParser, ArgumentDefaultsHelpFormatter
 from .models.load_model import load_model
 from .utils.metrics import Metrics
 from .utils.lr_scheduler import CosineAnnealingWarmUpRestarts
+from .utils.learnable_losses import PerEmotionLearnableWeightedMSE, UncertaintyWeightedMSE
 
 from einops import rearrange
 
@@ -119,6 +120,32 @@ class LitClassifier(pl.LightningModule):
         self.metric = Metrics()
 
         self.valid_only = kwargs.get("valid_only", False) # kimbo change
+
+        # Initialize learnable loss functions for regression tasks
+        if self.hparams.downstream_task_type == 'regression':
+            loss_type = self.hparams.get('regression_loss_type', 'mse')
+            if loss_type == 'per_emotion_weighted':
+                print(f"\n{'='*80}")
+                print("Using Per-Emotion Learnable Weighted MSE Loss (Option 2)")
+                print(f"{'='*80}\n")
+                self.learnable_loss = PerEmotionLearnableWeightedMSE(
+                    num_emotions=self.hparams.num_targets,
+                    init_zero_weight=self.hparams.get('init_zero_weight', 0.1),
+                    init_nonzero_weight=self.hparams.get('init_nonzero_weight', 5.0)
+                )
+            elif loss_type == 'uncertainty_weighted':
+                print(f"\n{'='*80}")
+                print("Using Uncertainty-based Weighted MSE Loss (Option 3)")
+                print(f"{'='*80}\n")
+                self.learnable_loss = UncertaintyWeightedMSE(
+                    num_emotions=self.hparams.num_targets,
+                    init_log_var=self.hparams.get('init_log_var', 0.0)
+                )
+            else:
+                print(f"\nUsing standard MSE loss\n")
+                self.learnable_loss = None
+        else:
+            self.learnable_loss = None
 
     def forward(self, x):
         x = self.model(x)
@@ -267,14 +294,28 @@ class LitClassifier(pl.LightningModule):
                 logits = logits.view(B, T, E)
                 target = target.view(B, T, E)
 
-                loss_list = []
-                for i in range(E):
-                    mse_i = F.mse_loss(logits[:, :, i], target[:, :, i])
-                    result_dict[f"{mode}_mse_emotion_{i}"] = mse_i  # wandb 기록용
-                    loss_list.append(mse_i)
-                loss = sum(loss_list) / E
+                # Use learnable loss if available
+                if self.learnable_loss is not None:
+                    loss = self.learnable_loss(logits, target)
+
+                    # Still log per-emotion MSE for monitoring
+                    for i in range(E):
+                        mse_i = F.mse_loss(logits[:, :, i], target[:, :, i])
+                        result_dict[f"{mode}_mse_emotion_{i}"] = mse_i
+                else:
+                    # Standard MSE loss (original behavior)
+                    loss_list = []
+                    for i in range(E):
+                        mse_i = F.mse_loss(logits[:, :, i], target[:, :, i])
+                        result_dict[f"{mode}_mse_emotion_{i}"] = mse_i
+                        loss_list.append(mse_i)
+                    loss = sum(loss_list) / E
             else:
-                loss = F.mse_loss(logits.squeeze(), target.squeeze())
+                # Use learnable loss if available
+                if self.learnable_loss is not None:
+                    loss = self.learnable_loss(logits.squeeze(), target.squeeze())
+                else:
+                    loss = F.mse_loss(logits.squeeze(), target.squeeze())
                 result_dict[f"{mode}_mse"] = loss
 
             l1 = F.l1_loss(logits.squeeze(), target.squeeze())
@@ -633,6 +674,36 @@ class LitClassifier(pl.LightningModule):
         # evaluate
         self._evaluate_metrics(subj_valid, total_out_valid, mode="valid")
 
+        # Log learnable loss weights/uncertainties
+        if self.learnable_loss is not None and self.trainer.is_global_zero:
+            if isinstance(self.learnable_loss, PerEmotionLearnableWeightedMSE):
+                weights = self.learnable_loss.get_weights()
+                print(f"\n{'='*80}")
+                print("Learned Weights (Per-Emotion Weighted MSE)")
+                print(f"{'='*80}")
+                print(f"Zero weights:     {weights['zero_weights']}")
+                print(f"Non-zero weights: {weights['nonzero_weights']}")
+                print(f"{'='*80}\n")
+
+                # Log to wandb
+                for i in range(self.hparams.num_targets):
+                    self.log(f"weight_zero_{i}", weights['zero_weights'][i], sync_dist=True)
+                    self.log(f"weight_nonzero_{i}", weights['nonzero_weights'][i], sync_dist=True)
+
+            elif isinstance(self.learnable_loss, UncertaintyWeightedMSE):
+                uncertainties = self.learnable_loss.get_uncertainties()
+                print(f"\n{'='*80}")
+                print("Learned Uncertainties (Uncertainty-based Weighted MSE)")
+                print(f"{'='*80}")
+                print(f"Log variances: {uncertainties['log_vars']}")
+                print(f"Sigmas (σ):    {uncertainties['sigmas']}")
+                print(f"{'='*80}\n")
+
+                # Log to wandb
+                for i in range(self.hparams.num_targets):
+                    self.log(f"uncertainty_logvar_{i}", uncertainties['log_vars'][i], sync_dist=True)
+                    self.log(f"uncertainty_sigma_{i}", uncertainties['sigmas'][i], sync_dist=True)
+
         # Calculate optimal thresholds from validation set
         self._calculate_optimal_thresholds(subj_valid, total_out_valid)
 
@@ -851,4 +922,16 @@ class LitClassifier(pl.LightningModule):
         group.add_argument("--decoder", type=str, default="single_target_decoder", help="Which decoder to use: (i) single_target_decoder - predict a single value via regression or classification | (ii) series_decoder: predict a series of values (one per timeframe) via regression")
         group.add_argument("--num_targets", type=int, default=7, help="Number of targets to predict in series_decoder")
         # parser.add_argument("--valid_only", action='store_true', help="disable running _evaluate_metrics(mode='test') at validation stage") # kimbo change
+
+        # learnable loss related (for regression)
+        group.add_argument("--regression_loss_type", type=str, default="mse",
+                          choices=["mse", "per_emotion_weighted", "uncertainty_weighted"],
+                          help="Loss function type for regression: 'mse' (standard), 'per_emotion_weighted' (Option 2: learnable weights for zero/non-zero), 'uncertainty_weighted' (Option 3: uncertainty-based weighting)")
+        group.add_argument("--init_zero_weight", type=float, default=0.1,
+                          help="Initial weight for zero values in per_emotion_weighted loss (default: 0.1)")
+        group.add_argument("--init_nonzero_weight", type=float, default=5.0,
+                          help="Initial weight for non-zero values in per_emotion_weighted loss (default: 5.0)")
+        group.add_argument("--init_log_var", type=float, default=0.0,
+                          help="Initial log variance for uncertainty_weighted loss (default: 0.0, i.e., variance=1.0)")
+
         return parser

@@ -175,6 +175,14 @@ def cli_main():
         if args.test_only:
             tags.append("test_only")  # kimbo change
 
+        # Add loss type tag for regression tasks
+        if args.downstream_task_type == "regression" and hasattr(args, "regression_loss_type"):
+            tags.append(f"loss_{args.regression_loss_type}")
+
+        # Add sequence length tag
+        if hasattr(args, "sequence_length"):
+            tags.append(f"seq{args.sequence_length}")
+
         os.environ["WANDB_ANONYMOUS"] = "allow"
         # W&B Logger 설정
         logger = WandbLogger(
