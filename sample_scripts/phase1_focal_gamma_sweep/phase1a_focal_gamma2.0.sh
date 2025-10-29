@@ -2,7 +2,7 @@
 #SBATCH --job-name phase1a_focal_g2.0
 #SBATCH -t 24:00:00
 #SBATCH --nodes=1
-#SBATCH --nodelist=node3
+#SBATCH --nodelist=node1
 #SBATCH --gres=gpu:1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=4
