@@ -331,6 +331,95 @@ class WeightedFocalMSELoss(nn.Module):
                 f"reduction='{self.reduction}')")
 
 
+class TweedieLoss(nn.Module):
+    """
+    Tweedie Loss for Zero-Inflated Regression
+
+    The Tweedie distribution is designed for zero-inflated positive continuous data,
+    making it perfect for sparse regression tasks where most targets are zero.
+
+    The Tweedie distribution is a compound Poisson-Gamma distribution that naturally
+    handles:
+    - Point mass at zero (zero-inflation)
+    - Positive continuous values (magnitude prediction)
+
+    The power parameter p controls the variance-mean relationship:
+    - p = 1: Poisson (count data)
+    - 1 < p < 2: Compound Poisson-Gamma (zero-inflated continuous) ← Use this!
+    - p = 2: Gamma (positive continuous)
+
+    Reference:
+    - "Optimizing Video Recommendation Systems: A Deep Dive into Tweedie Regression" (2024)
+    - Industry validated: Tubi achieved +0.4% revenue, +0.15% watch time
+    - Theoretical foundation: Lambert (1992), Dunn & Smyth (2005)
+
+    Args:
+        p (float): Power parameter (1 < p < 2, default: 1.5)
+                  1.5 is a good starting point for zero-inflated data
+        reduction (str): 'mean' or 'sum' or 'none' (default: 'mean')
+        eps (float): Small constant for numerical stability (default: 1e-8)
+
+    Example:
+        >>> loss_fn = TweedieLoss(p=1.5)
+        >>> pred = torch.randn(32, 20, 7).abs()  # Must be positive
+        >>> target = torch.randn(32, 20, 7).abs()
+        >>> target = torch.where(torch.rand_like(target) > 0.7, target, torch.zeros_like(target))
+        >>> loss = loss_fn(pred, target)
+    """
+
+    def __init__(self, p=1.5, reduction='mean', eps=1e-8):
+        super().__init__()
+        if not (1.0 < p < 2.0):
+            raise ValueError(f"Power parameter p must be in (1, 2), got {p}")
+
+        self.p = p
+        self.reduction = reduction
+        self.eps = eps
+
+    def forward(self, pred, target):
+        """
+        Compute Tweedie deviance loss
+
+        The Tweedie deviance for observation (y, μ) is:
+        d(y, μ) = -y * μ^(1-p) / (1-p) + μ^(2-p) / (2-p)
+
+        This is derived from the log-likelihood of the Tweedie distribution.
+
+        Args:
+            pred: Predictions, shape (batch, seq_len, num_emotions) or (batch, num_emotions)
+                  Must be non-negative (use softplus or exp activation)
+            target: Ground truth, same shape as pred
+                   Can contain zeros (zero-inflation) and positive values
+
+        Returns:
+            Scalar loss value (if reduction='mean')
+        """
+        # Ensure predictions are positive (add small epsilon for stability)
+        pred = torch.clamp(pred, min=0) + self.eps
+
+        # Compute Tweedie deviance
+        # Term 1: -y * μ^(1-p) / (1-p)
+        # Term 2: μ^(2-p) / (2-p)
+
+        term1 = -target * torch.pow(pred, 1 - self.p) / (1 - self.p)
+        term2 = torch.pow(pred, 2 - self.p) / (2 - self.p)
+
+        deviance = term1 + term2
+
+        # Reduction
+        if self.reduction == 'mean':
+            return deviance.mean()
+        elif self.reduction == 'sum':
+            return deviance.sum()
+        elif self.reduction == 'none':
+            return deviance
+        else:
+            raise ValueError(f"Invalid reduction: {self.reduction}")
+
+    def __repr__(self):
+        return f"TweedieLoss(p={self.p}, reduction='{self.reduction}', eps={self.eps})"
+
+
 # Example usage and testing
 if __name__ == "__main__":
     print("="*80)
@@ -386,21 +475,56 @@ if __name__ == "__main__":
     print(f"Loss: {loss_wfocal.item():.4f}")
     print(f"Gamma: {loss_fn_wfocal.gamma}, Nonzero weight: {loss_fn_wfocal.nonzero_weight}")
 
+    # Test Tweedie Loss
+    print("\n" + "-"*80)
+    print("Tweedie Loss")
+    print("-"*80)
+    # Make predictions and targets positive for Tweedie
+    pred_pos = torch.abs(pred)
+    target_pos = torch.abs(target)
+    target_pos = torch.where(torch.rand_like(target_pos) > 0.7, target_pos, torch.zeros_like(target_pos))
+
+    loss_fn_tweedie = TweedieLoss(p=1.5)
+    loss_tweedie = loss_fn_tweedie(pred_pos, target_pos)
+    print(f"Loss: {loss_tweedie.item():.4f}")
+    print(f"Power parameter p: {loss_fn_tweedie.p}")
+    print(f"Target sparsity: {(target_pos == 0).float().mean().item():.2%}")
+
     # Test backward pass
     print("\n" + "-"*80)
     print("Testing backward pass")
     print("-"*80)
+
+    # Create fresh tensors with grad enabled
+    pred_grad = torch.randn(batch_size, seq_len, num_emotions, requires_grad=True)
+    target_grad = torch.randn(batch_size, seq_len, num_emotions)
+    target_grad = torch.where(torch.rand_like(target_grad) > 0.7, target_grad, torch.zeros_like(target_grad))
+
+    loss_2 = loss_fn_2(pred_grad, target_grad)
     loss_2.backward()
     print(f"✓ Option 2 backward pass successful")
 
+    pred_grad = torch.randn(batch_size, seq_len, num_emotions, requires_grad=True)
+    loss_3 = loss_fn_3(pred_grad, target_grad)
     loss_3.backward()
     print(f"✓ Option 3 backward pass successful")
 
+    pred_grad = torch.randn(batch_size, seq_len, num_emotions, requires_grad=True)
+    loss_focal = loss_fn_focal(pred_grad, target_grad)
     loss_focal.backward()
     print(f"✓ Focal MSE backward pass successful")
 
+    pred_grad = torch.randn(batch_size, seq_len, num_emotions, requires_grad=True)
+    loss_wfocal = loss_fn_wfocal(pred_grad, target_grad)
     loss_wfocal.backward()
     print(f"✓ Weighted Focal MSE backward pass successful")
+
+    pred_grad = torch.abs(torch.randn(batch_size, seq_len, num_emotions, requires_grad=True))
+    target_grad_pos = torch.abs(target_grad)
+    target_grad_pos = torch.where(torch.rand_like(target_grad_pos) > 0.7, target_grad_pos, torch.zeros_like(target_grad_pos))
+    loss_tweedie = loss_fn_tweedie(pred_grad, target_grad_pos)
+    loss_tweedie.backward()
+    print(f"✓ Tweedie Loss backward pass successful")
 
     print("\n" + "="*80)
     print("All tests passed!")
