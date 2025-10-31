@@ -22,6 +22,7 @@ from .utils.learnable_losses import (
     UncertaintyWeightedMSE,
     FocalMSELoss,
     WeightedFocalMSELoss,
+    NormalizedFocalMSELoss,
     TweedieLoss
 )
 
@@ -169,6 +170,17 @@ class LitClassifier(pl.LightningModule):
                     gamma=self.hparams.get('focal_gamma', 2.0),
                     zero_weight=self.hparams.get('zero_weight', 1.0),
                     nonzero_weight=self.hparams.get('nonzero_weight', 5.0)
+                )
+            elif loss_type == 'normalized_focal_mse':
+                print(f"\n{'='*80}")
+                print("Using Normalized Focal MSE Loss (Scale-Robust)")
+                print(f"  Gamma: {self.hparams.get('focal_gamma', 1.0)}")
+                print(f"  Epsilon: {self.hparams.get('focal_eps', 1e-6)}")
+                print(f"  Scale-invariant: Handles different emotion ranges (Positive: 0-27, Sad: 0-5)")
+                print(f"{'='*80}\n")
+                self.learnable_loss = NormalizedFocalMSELoss(
+                    gamma=self.hparams.get('focal_gamma', 1.0),
+                    eps=self.hparams.get('focal_eps', 1e-6)
                 )
             elif loss_type == 'tweedie':
                 print(f"\n{'='*80}")
@@ -1225,8 +1237,8 @@ class LitClassifier(pl.LightningModule):
 
         # learnable loss related (for regression)
         group.add_argument("--regression_loss_type", type=str, default="mse",
-                          choices=["mse", "per_emotion_weighted", "uncertainty_weighted", "focal_mse", "weighted_focal_mse", "tweedie"],
-                          help="Loss function type for regression: 'mse' (standard), 'per_emotion_weighted' (learnable weights for zero/non-zero), 'uncertainty_weighted' (uncertainty-based weighting), 'focal_mse' (focal loss for hard samples), 'weighted_focal_mse' (focal + zero/non-zero weighting), 'tweedie' (Tweedie loss for zero-inflated data)")
+                          choices=["mse", "per_emotion_weighted", "uncertainty_weighted", "focal_mse", "weighted_focal_mse", "normalized_focal_mse", "tweedie"],
+                          help="Loss function type for regression: 'mse' (standard), 'per_emotion_weighted' (learnable weights for zero/non-zero), 'uncertainty_weighted' (uncertainty-based weighting), 'focal_mse' (focal loss for hard samples), 'weighted_focal_mse' (focal + zero/non-zero weighting), 'normalized_focal_mse' (scale-robust focal loss), 'tweedie' (Tweedie loss for zero-inflated data)")
         group.add_argument("--init_zero_weight", type=float, default=0.1,
                           help="Initial weight for zero values in per_emotion_weighted loss (default: 0.1)")
         group.add_argument("--init_nonzero_weight", type=float, default=5.0,
@@ -1235,6 +1247,8 @@ class LitClassifier(pl.LightningModule):
                           help="Initial log variance for uncertainty_weighted loss (default: 0.0, i.e., variance=1.0)")
         group.add_argument("--focal_gamma", type=float, default=2.0,
                           help="Gamma parameter for focal losses (default: 2.0). Higher gamma = more focus on hard samples")
+        group.add_argument("--focal_eps", type=float, default=1e-6,
+                          help="Epsilon for numerical stability in normalized_focal_mse loss (default: 1e-6)")
         group.add_argument("--zero_weight", type=float, default=1.0,
                           help="Weight for zero targets in weighted_focal_mse loss (default: 1.0)")
         group.add_argument("--nonzero_weight", type=float, default=5.0,

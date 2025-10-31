@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH --job-name phase1b_tw_p1.5_lr1e-5
+#SBATCH --job-name phase1c_norm_lr1e-5
 #SBATCH -t 24:00:00
 #SBATCH --nodes=1
 #SBATCH --nodelist=node1
@@ -12,8 +12,8 @@
 
 
 echo "=========================================="
-echo "Phase 1B: Tweedie Loss LR Sweep"
-echo "Configuration: p=1.5, lr=1e-5"
+echo "Phase 1C: Normalized Focal MSE LR Sweep"
+echo "Configuration: gamma=1.0, lr=1e-5"
 echo "Job ID: $SLURM_JOB_ID"
 echo "Node: $SLURM_NODELIST"
 echo "Start Time: $(date)"
@@ -33,13 +33,13 @@ python -c "import torch; print('CUDA available:', torch.cuda.is_available())"
 python -c "import torch; print('GPU count:', torch.cuda.device_count())"
 
 export MASTER_ADDR=`/bin/hostname -s`
-export MASTER_PORT=52856
+export MASTER_PORT=52846
 
 # wandb 환경변수
 export WANDB_API_KEY="ce3d72b255c21a2b99cd48915d63b62d36a17828"
 export WANDB_ANONYMOUS="allow"
 
-EXPERIMENT_NAME="phase1b_tweedie_p1.5_lr1e-5_${SLURM_JOB_ID}"
+EXPERIMENT_NAME="phase1c_norm_lr1e-5_${SLURM_JOB_ID}"
 
 
 TRAINER_ARGS="--accelerator gpu --max_epochs 5 --precision 16 --num_nodes 1 --devices 1 --strategy ddp --accumulate_grad_batches 4"
@@ -48,20 +48,20 @@ DATA_ARGS='--batch_size 2 --eval_batch_size 2 --num_workers 4 --input_type movie
 DEFAULT_ARGS="--project_name moviefmri --experiment_name $EXPERIMENT_NAME"
 OPTIONAL_ARGS='--c_multiplier 2 --last_layer_full_MSA --clf_head_version v1 --downstream_task emotions --downstream_task_type regression --use_scheduler --gamma 0.5 --cycle 0.5'
 RESUME_ARGS='--adjust_hrf --input_offset 0'
-LOSS_ARGS='--regression_loss_type tweedie --tweedie_p 1.5'
+LOSS_ARGS='--regression_loss_type normalized_focal_mse --focal_gamma 1.0'
 
 
 echo ""
 echo "=========================================="
 echo "Training Configuration:"
-echo "  Phase: 1B - Tweedie LR Sweep"
-echo "  Loss Type: Tweedie Loss"
-echo "  Power parameter p: 1.5 (recommended for zero-inflated)"
+echo "  Phase: 1C - Normalized Focal MSE (Scale-Robust)"
+echo "  Loss Type: Normalized Focal MSE"
+echo "  Gamma: 1.0"
 echo "  Learning Rate: 1e-5 (conservative)"
 echo "  Max Epochs: 5"
 echo "  Sequence Length: 20"
 echo "  Model: swin4d_ver9"
-echo "  Goal: LR optimization for Tweedie p=1.2"
+echo "  Goal: Test scale-robust variant"
 echo "=========================================="
 echo ""
 
@@ -77,9 +77,9 @@ EXIT_CODE=$?
 echo ""
 echo "=========================================="
 if [ $EXIT_CODE -eq 0 ]; then
-    echo "✅ Phase 1B (Tweedie p=1.2, lr=5e-5) completed successfully!"
+    echo "✅ Phase 1C (Normalized Focal, lr=1e-5) completed successfully!"
 else
-    echo "❌ Phase 1B (Tweedie p=1.2, lr=5e-5) failed with exit code $EXIT_CODE"
+    echo "❌ Phase 1C (Normalized Focal, lr=1e-5) failed with exit code $EXIT_CODE"
 fi
 echo "End Time: $(date)"
 echo "=========================================="

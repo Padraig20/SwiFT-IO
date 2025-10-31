@@ -331,6 +331,82 @@ class WeightedFocalMSELoss(nn.Module):
                 f"reduction='{self.reduction}')")
 
 
+class NormalizedFocalMSELoss(nn.Module):
+    """
+    Normalized Focal MSE Loss - Scale-Robust Focal Loss
+
+    This variant normalizes the MSE by the target magnitude before applying focal weighting,
+    making the loss scale-invariant and robust to different target ranges.
+
+    Key improvement over standard FocalMSELoss:
+    - Standard: focal_weight = (1 + mse)^gamma
+    - Normalized: focal_weight = (1 + mse/(|target| + eps))^gamma
+
+    Benefits:
+    1. Scale-invariant: Works well across different emotion value ranges (e.g., Positive: 0-27, Sad: 0-5)
+    2. Fair weighting: Large errors on small targets get same attention as large errors on large targets
+    3. Prevents bias toward high-magnitude emotions
+
+    Args:
+        gamma (float): Focusing parameter (default: 1.0)
+                      - gamma = 0: Equivalent to MSE
+                      - gamma > 0: Emphasizes hard samples
+        eps (float): Small constant for numerical stability (default: 1e-6)
+        reduction (str): 'mean', 'sum', or 'none' (default: 'mean')
+
+    Example:
+        >>> loss_fn = NormalizedFocalMSELoss(gamma=1.0)
+        >>> pred = torch.randn(32, 20, 7)
+        >>> target = torch.randn(32, 20, 7).abs()  # Positive targets
+        >>> loss = loss_fn(pred, target)
+
+    Reference:
+        Adapted from scale-robust focal loss variants for imbalanced regression
+    """
+
+    def __init__(self, gamma=1.0, eps=1e-6, reduction='mean'):
+        super().__init__()
+        self.gamma = gamma
+        self.eps = eps
+        self.reduction = reduction
+
+    def forward(self, pred, target):
+        """
+        Compute normalized focal MSE loss
+
+        Args:
+            pred: Predictions, shape (batch, seq_len, num_emotions) or (batch, num_emotions)
+            target: Ground truth, same shape as pred
+
+        Returns:
+            Scalar loss value (if reduction='mean')
+        """
+        # Compute MSE per sample
+        mse = (pred - target) ** 2
+
+        # Normalize MSE by target magnitude (key improvement!)
+        normalized_mse = mse / (target.abs() + self.eps)
+
+        # Apply focal weight on normalized MSE
+        focal_weight = (1.0 + normalized_mse) ** self.gamma
+
+        # Final loss: focal weight × original MSE
+        focal_mse = focal_weight * mse
+
+        # Reduction
+        if self.reduction == 'mean':
+            return focal_mse.mean()
+        elif self.reduction == 'sum':
+            return focal_mse.sum()
+        elif self.reduction == 'none':
+            return focal_mse
+        else:
+            raise ValueError(f"Invalid reduction: {self.reduction}")
+
+    def __repr__(self):
+        return f"NormalizedFocalMSELoss(gamma={self.gamma}, eps={self.eps}, reduction='{self.reduction}')"
+
+
 class TweedieLoss(nn.Module):
     """
     Tweedie Loss for Zero-Inflated Regression

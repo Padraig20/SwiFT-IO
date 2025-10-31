@@ -2,7 +2,7 @@
 #SBATCH --job-name phase1b_tw_p1.5_lr5e-5
 #SBATCH -t 24:00:00
 #SBATCH --nodes=1
-#SBATCH --nodelist=node3
+#SBATCH --nodelist=node1
 #SBATCH --gres=gpu:1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=4
@@ -13,7 +13,7 @@
 
 echo "=========================================="
 echo "Phase 1B: Tweedie Loss LR Sweep"
-echo "Configuration: p=1.2, lr=5e-5"
+echo "Configuration: p=1.5, lr=5e-5"
 echo "Job ID: $SLURM_JOB_ID"
 echo "Node: $SLURM_NODELIST"
 echo "Start Time: $(date)"

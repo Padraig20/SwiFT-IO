@@ -13,7 +13,7 @@
 
 echo "=========================================="
 echo "Phase 1B: Tweedie Loss LR Sweep"
-echo "Configuration: p=1.2, lr=5e-5"
+echo "Configuration: p=1.5, lr=3e-5"
 echo "Job ID: $SLURM_JOB_ID"
 echo "Node: $SLURM_NODELIST"
 echo "Start Time: $(date)"
