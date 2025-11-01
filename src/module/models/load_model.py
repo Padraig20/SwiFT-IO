@@ -1,5 +1,6 @@
-from .encoder.swin4d_transformer_ver7 import SwinTransformer4D
-from .encoder.swin4d_transformer_ver9 import SwinTransformer4D
+from .encoder.swin4d_transformer_ver7 import SwinTransformer4D as SwinTransformer4D_v7
+from .encoder.swin4d_transformer_ver9 import SwinTransformer4D as SwinTransformer4D_v9
+from .encoder.swin4d_transformer_ver11_downstream import RoPE4DSwinTransformer_Downstream as SwinTransformer4D_v11
 from .encoder.lstm_encoder import LSTMEncoder, LSTMEncoderLight
 from .decoder.single_target_decoder import SingleTargetDecoder
 from .decoder.series_decoder import SeriesDecoder
@@ -25,7 +26,7 @@ def load_model(model_name, hparams=None):
     dims = h * w * d * t
         
     if model_name == "swin4d_ver7":
-        net = SwinTransformer4D(
+        net = SwinTransformer4D_v7(
             img_size=hparams.img_size,
             in_chans=hparams.in_chans,
             embed_dim=hparams.embed_dim,
@@ -42,7 +43,24 @@ def load_model(model_name, hparams=None):
             attn_drop_rate=hparams.attn_drop_rate
         )
     elif model_name == "swin4d_ver9":
-        net = SwinTransformer4D(
+        net = SwinTransformer4D_v9(
+            img_size=hparams.img_size,
+            in_chans=hparams.in_chans,
+            embed_dim=hparams.embed_dim,
+            window_size=hparams.window_size,
+            first_window_size=hparams.first_window_size,
+            patch_size=hparams.patch_size,
+            depths=hparams.depths,
+            num_heads=hparams.num_heads,
+            c_multiplier=hparams.c_multiplier,
+            last_layer_full_MSA=hparams.last_layer_full_MSA,
+            to_float = to_float,
+            drop_rate=hparams.attn_drop_rate,
+            drop_path_rate=hparams.attn_drop_rate,
+            attn_drop_rate=hparams.attn_drop_rate
+        )
+    elif model_name == "swin4d_ver11":
+        net = SwinTransformer4D_v11(
             img_size=hparams.img_size,
             in_chans=hparams.in_chans,
             embed_dim=hparams.embed_dim,
@@ -81,7 +99,7 @@ def load_model(model_name, hparams=None):
         num_classes = 1 if hparams.downstream_task_type == 'regression' else hparams.num_classes
         net = SeriesDecoder(
             num_latents=embed_dim,
-            num_latent_channels=dims, # TODO: verify this
+            num_latent_channels=dims,  # D*H*W*T for seq-to-seq spatial-temporal resolution
             #activation_checkpointing=hparams.activation_checkpointing,
             #activation_offloading=hparams.activation_offloading,
             #num_cross_attention_heads=hparams.num_cross_attention_heads,

@@ -43,3 +43,14 @@ wandb/
 
 # Mock data for testing
 mock_data_for_local/
+
+# Results and analysis outputs
+results/
+igmap/clf_ig_jobs/
+igmap/clf_ig_jobs_correct/
+
+# Log files
+*.log
+
+# Temporary files
+temp_*.txt
