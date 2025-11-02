@@ -97,9 +97,11 @@ def load_model(model_name, hparams=None):
         )
     elif model_name == "series_decoder":
         num_classes = 1 if hparams.downstream_task_type == 'regression' else hparams.num_classes
+        # Ver11 outputs (B, C, L), after transpose -> (B, L, C)
+        # where L=dims (spatial-temporal), C=embed_dim (channels)
         net = SeriesDecoder(
-            num_latents=embed_dim,
-            num_latent_channels=dims,  # D*H*W*T for seq-to-seq spatial-temporal resolution
+            num_latents=dims,  # D*H*W*T (spatial-temporal resolution)
+            num_latent_channels=embed_dim,  # channels from encoder
             #activation_checkpointing=hparams.activation_checkpointing,
             #activation_offloading=hparams.activation_offloading,
             #num_cross_attention_heads=hparams.num_cross_attention_heads,

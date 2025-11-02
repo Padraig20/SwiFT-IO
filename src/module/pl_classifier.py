@@ -255,6 +255,10 @@ class LitClassifier(pl.LightningModule):
 
         feature = self.model(fmri)
 
+        # Ver11 outputs (B, C, L) but SeriesDecoder expects (B, L, C)
+        if self.hparams.model == 'swin4d_ver11' and self.hparams.decoder == 'series_decoder':
+            feature = feature.transpose(1, 2)  # (B, C, L) -> (B, L, C)
+
         # Classification task
         if self.hparams.downstream_task_type == 'classification':
             logits = self.output_head(feature)  # (b, num_classes) or (b, t, num_targets, num_classes)
@@ -270,7 +274,6 @@ class LitClassifier(pl.LightningModule):
                     target = target.squeeze()
         # Regression task
         elif self.hparams.downstream_task_type == 'regression':
-
             logits = self.output_head(feature) # (b,1) or (b, num_targets)
             unnormalized_target = target_value.float() # (b,1) or (b, t, num_targets)
 
@@ -438,7 +441,8 @@ class LitClassifier(pl.LightningModule):
             # ROC AUC calculation (handle case where only one class is present)
             try:
                 if num_classes == 2:
-                    roc_auc = roc_auc_score(targets_np, predictions_np)
+                    # Binary classification: use probability of positive class (class 1)
+                    roc_auc = roc_auc_score(targets_np, probabilities[:, 1].cpu().numpy())
                 else:
                     targets_one_hot = label_binarize(targets_np, classes=np.arange(num_classes))
                     roc_auc = roc_auc_score(targets_one_hot, probabilities.cpu().detach().numpy(), multi_class='ovr')
@@ -480,7 +484,9 @@ class LitClassifier(pl.LightningModule):
                     # ROC AUC calculation per emotion (handle case where only one class is present)
                     try:
                         if num_classes == 2:
-                            roc_auc_group = roc_auc_score(targets_np, predictions_np)
+                            # Binary classification: use probability of positive class (class 1)
+                            probs_pos = probabilities[..., 1].flatten().cpu().numpy()
+                            roc_auc_group = roc_auc_score(targets_np, probs_pos)
                         else:
                             targets_one_hot = label_binarize(targets_np, classes=np.arange(num_classes))
                             roc_auc_group = roc_auc_score(targets_one_hot, rearrange(probabilities, 'b t c -> (b t) c').cpu().detach().numpy(), multi_class='ovr')
