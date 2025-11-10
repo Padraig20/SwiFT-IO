@@ -925,9 +925,9 @@ class LitClassifier(pl.LightningModule):
         self._evaluate_metrics(subj_valid, total_out_valid, mode="valid")
 
         # ========================================================================
-        # Log summary metrics (average across emotions) for regression tasks
+        # Log summary metrics (average across emotions/targets) for regression tasks
         # ========================================================================
-        if self.hparams.downstream_task_type == 'regression' and self.hparams.decoder in ['series_decoder', 'lstm_series_regression_head']:
+        if self.hparams.downstream_task_type == 'regression' and self.hparams.decoder in ['series_decoder', 'lstm_series_regression_head', 'single_target_decoder', 'averaged_series_decoder', 'lstm_regression_head']:
             # Collect non-zero metrics from trainer's callback_metrics
             nonzero_maes = []
             nonzero_pearsons = []
@@ -1020,9 +1020,9 @@ class LitClassifier(pl.LightningModule):
             self._evaluate_metrics(subj_test, total_out_test, mode="test")
 
             # ========================================================================
-            # Log summary metrics for test set (average across emotions)
+            # Log summary metrics for test set (average across emotions/targets)
             # ========================================================================
-            if self.hparams.downstream_task_type == 'regression' and self.hparams.decoder in ['series_decoder', 'lstm_series_regression_head']:
+            if self.hparams.downstream_task_type == 'regression' and self.hparams.decoder in ['series_decoder', 'lstm_series_regression_head', 'single_target_decoder', 'averaged_series_decoder', 'lstm_regression_head']:
                 # Collect non-zero metrics from trainer's callback_metrics
                 nonzero_maes = []
                 nonzero_pearsons = []
@@ -1150,9 +1150,9 @@ class LitClassifier(pl.LightningModule):
         self._evaluate_metrics(subj_test, total_out_test, mode="test")
 
         # ========================================================================
-        # Log summary metrics for test set (average across emotions)
+        # Log summary metrics for test set (average across emotions/targets)
         # ========================================================================
-        if self.hparams.downstream_task_type == 'regression' and self.hparams.decoder in ['series_decoder', 'lstm_series_regression_head']:
+        if self.hparams.downstream_task_type == 'regression' and self.hparams.decoder in ['series_decoder', 'lstm_series_regression_head', 'single_target_decoder', 'averaged_series_decoder', 'lstm_regression_head']:
             # Collect non-zero metrics from trainer's callback_metrics
             nonzero_maes = []
             nonzero_pearsons = []
