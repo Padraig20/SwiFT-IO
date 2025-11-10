@@ -4,6 +4,7 @@ from .encoder.swin4d_transformer_ver11_downstream import RoPE4DSwinTransformer_D
 from .encoder.lstm_encoder import LSTMEncoder, LSTMEncoderLight
 from .decoder.single_target_decoder import SingleTargetDecoder
 from .decoder.series_decoder import SeriesDecoder
+from .decoder.averaged_series_decoder import AveragedSeriesDecoder
 from .decoder.lstm_decoder import LSTMRegressionHead, LSTMSeriesRegressionHead
 
 def load_model(model_name, hparams=None):
@@ -74,13 +75,17 @@ def load_model(model_name, hparams=None):
             to_float = to_float,
             drop_rate=hparams.attn_drop_rate,
             drop_path_rate=hparams.attn_drop_rate,
-            attn_drop_rate=hparams.attn_drop_rate
+            attn_drop_rate=hparams.attn_drop_rate,
+            use_flashattn=getattr(hparams, 'use_flashattn', False)
         )
     elif model_name == "single_target_decoder": # TODO add hparams?
         num_classes = 1 if hparams.downstream_task_type == 'regression' else hparams.num_classes
+        # Ver7/Ver9/Ver11 output (B, C, L), after transpose -> (B, L, C)
+        # where L=dims (spatial-temporal), C=embed_dim (channels)
+        encoder_out_channels = embed_dim  # This is the actual encoder output channel dimension
         net = SingleTargetDecoder(
-            num_latents=embed_dim,
-            num_latent_channels=dims, # TODO: verify this
+            num_latents=dims,  # D*H*W*T (spatial-temporal resolution)
+            num_latent_channels=encoder_out_channels,  # channels from encoder (embed_dim*8)
             #activation_checkpointing=hparams.activation_checkpointing,
             #activation_offloading=hparams.activation_offloading,
             #num_cross_attention_heads=hparams.num_cross_attention_heads,
@@ -99,9 +104,11 @@ def load_model(model_name, hparams=None):
         num_classes = 1 if hparams.downstream_task_type == 'regression' else hparams.num_classes
         # Ver11 outputs (B, C, L), after transpose -> (B, L, C)
         # where L=dims (spatial-temporal), C=embed_dim (channels)
+        # embed_dim is already multiplied by 8 (line 24), which matches encoder output
+        encoder_out_channels = embed_dim  # This is the actual encoder output channel dimension
         net = SeriesDecoder(
             num_latents=dims,  # D*H*W*T (spatial-temporal resolution)
-            num_latent_channels=embed_dim,  # channels from encoder
+            num_latent_channels=encoder_out_channels,  # channels from encoder (embed_dim*8)
             #activation_checkpointing=hparams.activation_checkpointing,
             #activation_offloading=hparams.activation_offloading,
             #num_cross_attention_heads=hparams.num_cross_attention_heads,
@@ -117,6 +124,19 @@ def load_model(model_name, hparams=None):
             num_classes=num_classes,
             num_targets=hparams.num_targets,
             downstream_task_type=hparams.downstream_task_type
+        )
+    elif model_name == "averaged_series_decoder":
+        # For subject-level predictions (Sex, Age) that average over time
+        num_classes = hparams.num_classes  # e.g., 2 for binary sex classification
+        num_targets = getattr(hparams, 'num_targets', 1)  # typically 1 for sex/age
+        encoder_out_channels = embed_dim  # channels from encoder (embed_dim*8)
+        net = AveragedSeriesDecoder(
+            num_latents=dims,  # D*H*W*T (spatial-temporal resolution)
+            num_latent_channels=encoder_out_channels,  # channels from encoder
+            num_output_queries=t_orig,  # timesteps (e.g., 20 for seq_length=20)
+            num_classes=num_classes,  # e.g., 2 for binary classification
+            num_targets=num_targets,  # 1 for single target (sex/age)
+            downstream_task_type=hparams.downstream_task_type  # 'classification' or 'regression'
         )
     elif model_name == "lstm_encoder":
         net = LSTMEncoder(

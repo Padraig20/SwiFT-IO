@@ -255,8 +255,10 @@ class LitClassifier(pl.LightningModule):
 
         feature = self.model(fmri)
 
-        # Ver11 outputs (B, C, L) but SeriesDecoder expects (B, L, C)
-        if self.hparams.model == 'swin4d_ver11' and self.hparams.decoder == 'series_decoder':
+        # Ver7, Ver9, Ver11 all output (B, C, L) but all decoders expect (B, L, C)
+        # Need transpose for series_decoder, averaged_series_decoder, single_target_decoder
+        if self.hparams.model in ['swin4d_ver7', 'swin4d_ver9', 'swin4d_ver11'] and \
+           self.hparams.decoder in ['series_decoder', 'averaged_series_decoder', 'single_target_decoder']:
             feature = feature.transpose(1, 2)  # (B, C, L) -> (B, L, C)
 
         # Classification task
@@ -266,6 +268,11 @@ class LitClassifier(pl.LightningModule):
             if self.hparams.decoder in ['series_decoder', 'lstm_series_regression_head']:
                 logits = rearrange(logits, 'b t ta c -> b (t ta) c')
                 target = rearrange(target, 'b t ta -> b (t ta)')
+            elif self.hparams.decoder == 'averaged_series_decoder':
+                # averaged_series_decoder outputs (b, num_classes) directly
+                # target should be (b,) - single label per subject
+                if target.dim() > 1:
+                    target = target.squeeze()
             else:
                 # For non-series decoders, squeeze if needed
                 if logits.dim() > 2:
@@ -612,6 +619,104 @@ class LitClassifier(pl.LightningModule):
                         self.log(f"{mode_str}_nonzero_pearson_{emotion_name}", nonzero_pearson, sync_dist=True)
                         self.log(f"{mode_str}_nonzero_adjusted_mae_{emotion_name}", nonzero_adjusted_mae, sync_dist=True)
                         self.log(f"{mode_str}_nonzero_adjusted_rmse_{emotion_name}", nonzero_adjusted_rmse, sync_dist=True)
+
+                    # ========================================================================
+                    # DETECTION METRICS: Zero vs Non-Zero Classification
+                    # ========================================================================
+
+                    # Threshold for binary detection (adjustable)
+                    detection_threshold = 0.5
+
+                    # Binary labels: 1 if target > threshold, 0 otherwise
+                    target_binary = (target_np > detection_threshold).astype(int)
+                    pred_binary = (logits_np > detection_threshold).astype(int)
+
+                    # Confusion matrix components
+                    TP = np.sum((target_binary == 1) & (pred_binary == 1))
+                    TN = np.sum((target_binary == 0) & (pred_binary == 0))
+                    FP = np.sum((target_binary == 0) & (pred_binary == 1))
+                    FN = np.sum((target_binary == 1) & (pred_binary == 0))
+
+                    # Detection metrics (with epsilon for stability)
+                    eps = 1e-8
+                    TPR = TP / (TP + FN + eps)  # Sensitivity/Recall
+                    FPR = FP / (FP + TN + eps)  # False Positive Rate
+                    Precision = TP / (TP + FP + eps)
+                    F1 = 2 * Precision * TPR / (Precision + TPR + eps)
+                    Specificity = TN / (TN + FP + eps)
+
+                    # AUROC for detection (if both classes present)
+                    try:
+                        if len(np.unique(target_binary)) > 1:
+                            detection_auroc = roc_auc_score(target_binary, logits_np)
+                        else:
+                            detection_auroc = 0.0
+                    except:
+                        detection_auroc = 0.0
+
+                    # Log detection metrics
+                    self.log(f"{mode_str}_detection_tpr_{emotion_name}", float(TPR), sync_dist=True)
+                    self.log(f"{mode_str}_detection_fpr_{emotion_name}", float(FPR), sync_dist=True)
+                    self.log(f"{mode_str}_detection_precision_{emotion_name}", float(Precision), sync_dist=True)
+                    self.log(f"{mode_str}_detection_f1_{emotion_name}", float(F1), sync_dist=True)
+                    self.log(f"{mode_str}_detection_specificity_{emotion_name}", float(Specificity), sync_dist=True)
+                    self.log(f"{mode_str}_detection_auroc_{emotion_name}", float(detection_auroc), sync_dist=True)
+
+                    # ========================================================================
+                    # MAGNITUDE-STRATIFIED METRICS: Small/Medium/Large values
+                    # ========================================================================
+
+                    if n_nonzero > 0:
+                        # Define magnitude ranges
+                        # Small: 0 < x <= 1
+                        # Medium: 1 < x <= 5
+                        # Large: x > 5
+
+                        mask_small = (target_np > 0) & (target_np <= 1)
+                        mask_medium = (target_np > 1) & (target_np <= 5)
+                        mask_large = (target_np > 5)
+
+                        # Small values
+                        if np.sum(mask_small) > 0:
+                            target_small = torch.from_numpy(target_np[mask_small]).to(logits_flat.device)
+                            logits_small = torch.from_numpy(logits_np[mask_small]).to(logits_flat.device)
+
+                            small_mae = F.l1_loss(logits_small, target_small)
+                            small_mse = F.mse_loss(logits_small, target_small)
+                            small_rmse = torch.sqrt(small_mse)
+
+                            self.log(f"{mode_str}_small_mae_{emotion_name}", small_mae, sync_dist=True)
+                            self.log(f"{mode_str}_small_mse_{emotion_name}", small_mse, sync_dist=True)
+                            self.log(f"{mode_str}_small_rmse_{emotion_name}", small_rmse, sync_dist=True)
+                            self.log(f"{mode_str}_n_small_{emotion_name}", float(np.sum(mask_small)), sync_dist=True)
+
+                        # Medium values
+                        if np.sum(mask_medium) > 0:
+                            target_medium = torch.from_numpy(target_np[mask_medium]).to(logits_flat.device)
+                            logits_medium = torch.from_numpy(logits_np[mask_medium]).to(logits_flat.device)
+
+                            medium_mae = F.l1_loss(logits_medium, target_medium)
+                            medium_mse = F.mse_loss(logits_medium, target_medium)
+                            medium_rmse = torch.sqrt(medium_mse)
+
+                            self.log(f"{mode_str}_medium_mae_{emotion_name}", medium_mae, sync_dist=True)
+                            self.log(f"{mode_str}_medium_mse_{emotion_name}", medium_mse, sync_dist=True)
+                            self.log(f"{mode_str}_medium_rmse_{emotion_name}", medium_rmse, sync_dist=True)
+                            self.log(f"{mode_str}_n_medium_{emotion_name}", float(np.sum(mask_medium)), sync_dist=True)
+
+                        # Large values
+                        if np.sum(mask_large) > 0:
+                            target_large = torch.from_numpy(target_np[mask_large]).to(logits_flat.device)
+                            logits_large = torch.from_numpy(logits_np[mask_large]).to(logits_flat.device)
+
+                            large_mae = F.l1_loss(logits_large, target_large)
+                            large_mse = F.mse_loss(logits_large, target_large)
+                            large_rmse = torch.sqrt(large_mse)
+
+                            self.log(f"{mode_str}_large_mae_{emotion_name}", large_mae, sync_dist=True)
+                            self.log(f"{mode_str}_large_mse_{emotion_name}", large_mse, sync_dist=True)
+                            self.log(f"{mode_str}_large_rmse_{emotion_name}", large_rmse, sync_dist=True)
+                            self.log(f"{mode_str}_n_large_{emotion_name}", float(np.sum(mask_large)), sync_dist=True)
 
                     # Zero metrics
                     if n_zero > 0:
@@ -1230,6 +1335,7 @@ class LitClassifier(pl.LightningModule):
         group.add_argument("--last_layer_full_MSA", action='store_true', help="whether to use full-scale multi-head self-attention at the last layers")
         group.add_argument("--clf_head_version", type=str, default="v1", help="clf head version, v2 has a hidden layer")
         group.add_argument("--attn_drop_rate", type=float, default=0, help="dropout rate of attention layers")
+        group.add_argument("--use_flashattn", type=lambda x: str(x).lower() == 'true', default=False, help="whether to use Flash Attention (PyTorch 2.0+)")
 
         # others
         group.add_argument("--scalability_check", action='store_true', help="whether to check scalability")
