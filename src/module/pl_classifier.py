@@ -435,9 +435,17 @@ class LitClassifier(pl.LightningModule):
                 subj_targets = subj_targets.flatten()
                 
             num_classes = subj_avg_logits.shape[1]
-            
+
             probabilities = F.softmax(subj_avg_logits.to(dtype=torch.float32), dim=1) # (b,num_classes), require 32 bit precision
-            predictions = probabilities.argmax(dim=1) # (b)
+
+            # Use optimal threshold if available (for binary classification), otherwise use argmax (threshold=0.5)
+            if self.optimal_thresholds and 0 in self.optimal_thresholds and mode == 'test' and num_classes == 2:
+                opt_thr = self.optimal_thresholds[0]
+                predictions = (probabilities[:, 1] >= opt_thr).long()  # (b)
+                if self.trainer.is_global_zero:  # Only print once in distributed training
+                    print(f"  [INFO] Single target ({mode}): Using optimal threshold {opt_thr:.4f}")
+            else:
+                predictions = probabilities.argmax(dim=1) # (b)
             
             predictions_np = predictions.cpu().numpy()
             targets_np = subj_targets.cpu().numpy()
@@ -535,14 +543,30 @@ class LitClassifier(pl.LightningModule):
                 pearson_coef = pearson(subj_avg_logits, subj_targets)
                 r2 = r2_score(subj_avg_logits, subj_targets) if len(subj_avg_logits) >=2 else 0
             
-            if self.hparams.decoder in ['series_decoder', 'lstm_series_regression_head']:
-                
-                # evaluate multiple targets separately
-                t = self.hparams.img_size[3]
-            
-                subj_avg_logits = subj_avg_logits.view(-1, t ,self.hparams.num_targets) # (b, t*num_targets) -> (b, t, num_targets)
-                subj_targets = subj_targets.view(-1, t ,self.hparams.num_targets) # (b, t*num_targets) -> (b, t, num_targets)
-            
+            # ========================================================================
+            # STRATIFIED METRICS: Support for all multi-target regression decoders
+            # ========================================================================
+            if self.hparams.decoder in ['series_decoder', 'lstm_series_regression_head', 'lstm_regression_head', 'averaged_series_decoder', 'single_target_decoder']:
+
+                # Handle temporal decoders (series_decoder, lstm_series_regression_head)
+                if self.hparams.decoder in ['series_decoder', 'lstm_series_regression_head']:
+                    # evaluate multiple targets separately with temporal dimension
+                    t = self.hparams.img_size[3]
+
+                    subj_avg_logits = subj_avg_logits.view(-1, t ,self.hparams.num_targets) # (b, t*num_targets) -> (b, t, num_targets)
+                    subj_targets = subj_targets.view(-1, t ,self.hparams.num_targets) # (b, t*num_targets) -> (b, t, num_targets)
+
+                # Handle non-temporal multi-target decoders
+                elif self.hparams.decoder in ['lstm_regression_head', 'averaged_series_decoder'] or (self.hparams.decoder == 'single_target_decoder' and self.hparams.num_targets > 1):
+                    # These decoders output (b, num_targets) without temporal dimension
+                    # Reshape to (b, 1, num_targets) to unify processing
+                    if len(subj_avg_logits.shape) == 1:
+                        subj_avg_logits = subj_avg_logits.unsqueeze(0)
+                        subj_targets = subj_targets.unsqueeze(0)
+                    if len(subj_avg_logits.shape) == 2:
+                        subj_avg_logits = subj_avg_logits.unsqueeze(1)  # (b, num_targets) -> (b, 1, num_targets)
+                        subj_targets = subj_targets.unsqueeze(1)  # (b, num_targets) -> (b, 1, num_targets)
+
                 for i in range(self.hparams.num_targets):
                     emotion_name = self.EMOTION_NAMES[i] if i < len(self.EMOTION_NAMES) else f"emotion_{i}"
                     logits_group = subj_avg_logits[..., i]  # Shape: [batch_size, temporal_size]
@@ -624,12 +648,21 @@ class LitClassifier(pl.LightningModule):
                     # DETECTION METRICS: Zero vs Non-Zero Classification
                     # ========================================================================
 
-                    # Threshold for binary detection (adjustable)
+                    # Convert to original scale for detection threshold
+                    # (normalized scale에서 threshold를 적용하면 부정확함)
+                    if self.hparams.label_scaling_method == 'standardization':
+                        target_np_original = target_np * self.scaler.scale_[0] + self.scaler.mean_[0]
+                        logits_np_original = logits_np * self.scaler.scale_[0] + self.scaler.mean_[0]
+                    elif self.hparams.label_scaling_method == 'minmax':
+                        target_np_original = target_np * (self.scaler.data_max_[0] - self.scaler.data_min_[0]) + self.scaler.data_min_[0]
+                        logits_np_original = logits_np * (self.scaler.data_max_[0] - self.scaler.data_min_[0]) + self.scaler.data_min_[0]
+
+                    # Threshold for binary detection (in original scale)
                     detection_threshold = 0.5
 
-                    # Binary labels: 1 if target > threshold, 0 otherwise
-                    target_binary = (target_np > detection_threshold).astype(int)
-                    pred_binary = (logits_np > detection_threshold).astype(int)
+                    # Binary labels: 1 if target > threshold, 0 otherwise (using original scale)
+                    target_binary = (target_np_original > detection_threshold).astype(int)
+                    pred_binary = (logits_np_original > detection_threshold).astype(int)
 
                     # Confusion matrix components
                     TP = np.sum((target_binary == 1) & (pred_binary == 1))
@@ -646,9 +679,10 @@ class LitClassifier(pl.LightningModule):
                     Specificity = TN / (TN + FP + eps)
 
                     # AUROC for detection (if both classes present)
+                    # Use original scale logits for AUROC calculation
                     try:
                         if len(np.unique(target_binary)) > 1:
-                            detection_auroc = roc_auc_score(target_binary, logits_np)
+                            detection_auroc = roc_auc_score(target_binary, logits_np_original)
                         else:
                             detection_auroc = 0.0
                     except:
@@ -763,7 +797,7 @@ class LitClassifier(pl.LightningModule):
         if self.hparams.downstream_task_type != 'classification':
             return
 
-        if self.hparams.decoder not in ['series_decoder', 'lstm_series_regression_head']:
+        if self.hparams.decoder not in ['series_decoder', 'lstm_series_regression_head', 'single_target_decoder', 'averaged_series_decoder']:
             return
 
         if self.hparams.num_classes != 2:
@@ -777,7 +811,11 @@ class LitClassifier(pl.LightningModule):
         for subj in subjects:
             subj_logits = [total_out[i][0] for i in range(len(subj_array)) if subj_array[i] == subj]
             subj_avg_logits.append(subj_logits)
-            subj_targets.append([total_out[i][1] for i in range(len(subj_array)) if subj_array[i] == subj][0])
+            target = [total_out[i][1] for i in range(len(subj_array)) if subj_array[i] == subj][0]
+            # Ensure target is a tensor
+            if not isinstance(target, torch.Tensor):
+                target = torch.tensor(target)
+            subj_targets.append(target)
 
         subj_avg_logits = [i[0] for i in subj_avg_logits]
         subj_avg_logits = torch.stack(subj_avg_logits)
@@ -787,31 +825,18 @@ class LitClassifier(pl.LightningModule):
         print("CALCULATING OPTIMAL THRESHOLDS (Youden Index)")
         print("="*80)
 
-        t = self.hparams.img_size[3]
-
-        # First flatten: (b, t*ta, c) -> (b*t*ta, c)
-        subj_avg_logits = rearrange(subj_avg_logits, 'b tta c -> (b tta) c')
-        subj_targets = subj_targets.flatten()
-
-        # Then reshape: (b*t*ta, c) -> (b, t, ta, c)
-        subj_avg_logits = rearrange(subj_avg_logits, '(b t ta) c -> b t ta c',
-                                   t=t, ta=self.hparams.num_targets, c=self.hparams.num_classes)
-        subj_targets = rearrange(subj_targets, '(b t ta) -> b t ta',
-                                t=t, ta=self.hparams.num_targets)
-
         optimal_thresholds = {}
 
-        for i in range(self.hparams.num_targets):
-            logits_emotion = subj_avg_logits[:, :, i, :]  # (batch, time, num_classes)
-            targets_emotion = subj_targets[:, :, i]  # (batch, time)
-
+        # Handle single_target_decoder and averaged_series_decoder
+        if self.hparams.decoder in ['single_target_decoder', 'averaged_series_decoder']:
+            # For single target: (batch, num_classes)
             # Get probabilities for class 1
-            probs = F.softmax(logits_emotion.to(dtype=torch.float32), dim=-1)
-            probs_pos = probs[..., 1]
+            probs = F.softmax(subj_avg_logits.to(dtype=torch.float32), dim=-1)
+            probs_pos = probs[:, 1]
 
-            # Flatten
-            probs_flat = probs_pos.flatten().cpu().numpy()
-            targets_flat = targets_emotion.flatten().cpu().numpy()
+            # Convert to numpy
+            probs_flat = probs_pos.cpu().numpy()
+            targets_flat = subj_targets.cpu().numpy()
 
             # Remove NaN
             valid_mask = ~np.isnan(targets_flat) & ~np.isnan(probs_flat)
@@ -819,27 +844,80 @@ class LitClassifier(pl.LightningModule):
             targets_flat = targets_flat[valid_mask]
 
             if len(targets_flat) == 0:
-                print(f"  Emotion {i}: No valid samples - using default threshold 0.5")
-                optimal_thresholds[i] = 0.5
-                continue
+                print(f"  Single target: No valid samples - using default threshold 0.5")
+                optimal_thresholds[0] = 0.5
+            else:
+                # Check if both classes present
+                unique_classes = np.unique(targets_flat)
+                if len(unique_classes) < 2:
+                    print(f"  Single target: Only one class ({unique_classes}) - using default threshold 0.5")
+                    optimal_thresholds[0] = 0.5
+                else:
+                    # Calculate ROC curve
+                    fpr, tpr, thresholds = roc_curve(targets_flat, probs_flat)
 
-            # Check if both classes present
-            unique_classes = np.unique(targets_flat)
-            if len(unique_classes) < 2:
-                print(f"  Emotion {i}: Only one class ({unique_classes}) - using default threshold 0.5")
-                optimal_thresholds[i] = 0.5
-                continue
+                    # Youden index = TPR - FPR
+                    j_scores = tpr - fpr
+                    optimal_idx = j_scores.argmax()
+                    opt_thr = float(thresholds[optimal_idx])
 
-            # Calculate ROC curve
-            fpr, tpr, thresholds = roc_curve(targets_flat, probs_flat)
+                    optimal_thresholds[0] = opt_thr
+                    print(f"  Single target: Optimal threshold = {opt_thr:.4f} (J={j_scores[optimal_idx]:.4f})")
+                    print(f"  Single target: Sensitivity = {tpr[optimal_idx]:.4f}, Specificity = {1-fpr[optimal_idx]:.4f}")
 
-            # Youden index = TPR - FPR
-            j_scores = tpr - fpr
-            optimal_idx = j_scores.argmax()
-            opt_thr = float(thresholds[optimal_idx])
+        # Handle series_decoder and lstm_series_regression_head
+        elif self.hparams.decoder in ['series_decoder', 'lstm_series_regression_head']:
+            t = self.hparams.img_size[3]
 
-            optimal_thresholds[i] = opt_thr
-            print(f"  Emotion {i}: Optimal threshold = {opt_thr:.4f} (J={j_scores[optimal_idx]:.4f})")
+            # First flatten: (b, t*ta, c) -> (b*t*ta, c)
+            subj_avg_logits = rearrange(subj_avg_logits, 'b tta c -> (b tta) c')
+            subj_targets = subj_targets.flatten()
+
+            # Then reshape: (b*t*ta, c) -> (b, t, ta, c)
+            subj_avg_logits = rearrange(subj_avg_logits, '(b t ta) c -> b t ta c',
+                                       t=t, ta=self.hparams.num_targets, c=self.hparams.num_classes)
+            subj_targets = rearrange(subj_targets, '(b t ta) -> b t ta',
+                                    t=t, ta=self.hparams.num_targets)
+
+            for i in range(self.hparams.num_targets):
+                logits_emotion = subj_avg_logits[:, :, i, :]  # (batch, time, num_classes)
+                targets_emotion = subj_targets[:, :, i]  # (batch, time)
+
+                # Get probabilities for class 1
+                probs = F.softmax(logits_emotion.to(dtype=torch.float32), dim=-1)
+                probs_pos = probs[..., 1]
+
+                # Flatten
+                probs_flat = probs_pos.flatten().cpu().numpy()
+                targets_flat = targets_emotion.flatten().cpu().numpy()
+
+                # Remove NaN
+                valid_mask = ~np.isnan(targets_flat) & ~np.isnan(probs_flat)
+                probs_flat = probs_flat[valid_mask]
+                targets_flat = targets_flat[valid_mask]
+
+                if len(targets_flat) == 0:
+                    print(f"  Emotion {i}: No valid samples - using default threshold 0.5")
+                    optimal_thresholds[i] = 0.5
+                    continue
+
+                # Check if both classes present
+                unique_classes = np.unique(targets_flat)
+                if len(unique_classes) < 2:
+                    print(f"  Emotion {i}: Only one class ({unique_classes}) - using default threshold 0.5")
+                    optimal_thresholds[i] = 0.5
+                    continue
+
+                # Calculate ROC curve
+                fpr, tpr, thresholds = roc_curve(targets_flat, probs_flat)
+
+                # Youden index = TPR - FPR
+                j_scores = tpr - fpr
+                optimal_idx = j_scores.argmax()
+                opt_thr = float(thresholds[optimal_idx])
+
+                optimal_thresholds[i] = opt_thr
+                print(f"  Emotion {i}: Optimal threshold = {opt_thr:.4f} (J={j_scores[optimal_idx]:.4f})")
 
         self.optimal_thresholds = optimal_thresholds
         print("="*80 + "\n")
