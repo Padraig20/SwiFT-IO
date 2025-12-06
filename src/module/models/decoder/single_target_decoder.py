@@ -2,8 +2,8 @@ from typing import Optional
 
 import torch.nn as nn
 
-from module.models.decoder.backend.adapter import ClassificationOutputAdapter, TrainableQueryProvider
-from module.models.decoder.backend.modules import PerceiverDecoder
+from .backend.adapter import ClassificationOutputAdapter, TrainableQueryProvider
+from .backend.modules import PerceiverDecoder
 
 class SingleTargetDecoder(nn.Module):
     def __init__(self,

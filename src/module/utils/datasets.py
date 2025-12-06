@@ -110,7 +110,8 @@ class HBN(BaseDataset):
                                 num_frames,
                                 target[output_start_frame:min(output_start_frame+self.sample_duration,num_frames)],
                                 sex)
-                elif self.decoder == 'single_target_decoder':
+                elif self.decoder in ['single_target_decoder', 'averaged_series_decoder']:
+                    # Both decoders produce subject-level predictions (single target per subject)
                     data_tuple = (i,
                                   subject_name,
                                   subject_path,
@@ -120,7 +121,7 @@ class HBN(BaseDataset):
                                   target,
                                   sex)
                 else:
-                    raise ValueError("Invalid decoder")
+                    raise ValueError(f"Invalid decoder: {self.decoder}")
                 data.append(data_tuple)
 
         # train dataset

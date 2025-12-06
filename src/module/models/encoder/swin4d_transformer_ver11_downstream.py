@@ -459,7 +459,7 @@ class TemporalRoPEWindowAttention(nn.Module):
             k = apply_rope_rotation(k, device_cis_t)
             if mask is not None:
                 nw_t = mask.shape[0]
-                mask = torch.cat([mask.to(q.dtype)]*(b_//nw_t)).unsqueeze(1)
+                mask = torch.cat([mask.to(q.dtype)]*(B_//nw_t)).unsqueeze(1)
             attn = F.scaled_dot_product_attention(q, k, v, attn_mask=mask, dropout_p=self.dropout_p, scale=self.scale)  
             x = attn.transpose(1, 2).reshape(B_, N_t, C)
             
@@ -550,7 +550,7 @@ class SpatialRoPEWindowAttention(nn.Module):
             k = apply_rope_rotation(k, device_cis_spatial)
             if mask is not None:
                 nw_s = mask.shape[0]
-                mask = torch.cat([mask.to(q.dtype)]*(b_//nw_s)).unsqueeze(1)
+                mask = torch.cat([mask.to(q.dtype)]*(B_//nw_s)).unsqueeze(1)
             attn = F.scaled_dot_product_attention(q, k, v, attn_mask=mask, dropout_p=self.dropout_p, scale=self.scale)  
             x = attn.transpose(1, 2).reshape(B_, N_s, C)
         else: 
@@ -586,9 +586,9 @@ class FactorizedSwinTransformerBlock(nn.Module):
                  temporal_shift_size=0, spatial_shift_size=(0,0,0),
                  mlp_ratio=4., qkv_bias=True, qk_scale=None, drop=0., attn_drop=0., 
                  drop_path=0., act_layer="GELU", norm_layer=nn.LayerNorm,
-                 rope_theta=10000.0, 
-                 ls_t_init_values=0.9,
-                 ls_s_init_values=0.1,
+                 rope_theta=10000.0,
+                 ls_t_init_values=1.0,
+                 ls_s_init_values=1.0,
                  ls_mlp_init_values=1.0,
                  use_MuTransfer=False,
                  use_flashattn=False,
@@ -796,7 +796,6 @@ class FactorizedSwinTransformerBlock(nn.Module):
         x = shortcut_s + self.drop_path_s(self.ls_s(x_after_spatial))
         
         # --- MLP ---
-        x = x + self.drop_path_mlp(self.mlp(self.norm2(x)))
         x = x + self.drop_path_mlp(self.ls_mlp(self.mlp(self.norm2(x))))
         
         return x
@@ -822,8 +821,8 @@ class RoPE4DBasicLayer(nn.Module):
                  upsample: Optional[nn.Module] = None,
                  use_checkpoint=False,
                  rope_theta=10000.0,
-                 ls_t_init_values=0.9,
-                 ls_s_init_values=0.1,
+                 ls_t_init_values=1.0,
+                 ls_s_init_values=1.0,
                  ls_mlp_init_values=1.0,
                  use_MuTransfer=False,
                  use_flashattn=False,
@@ -944,9 +943,9 @@ class RoPE4DSwinTransformer_Downstream(nn.Module):
         downsample="mergingv2",
         upsample='pixelshuffle',
         num_classes=2,
-        rope_theta=10000.0,           
-        ls_t_init_values=0.9,
-        ls_s_init_values=0.1,
+        rope_theta=10000.0,
+        ls_t_init_values=1.0,
+        ls_s_init_values=1.0,
         ls_mlp_init_values=1.0,
         to_float: bool = False,
 
@@ -1287,7 +1286,7 @@ class RoPE4DSwinTransformer_Downstream(nn.Module):
         Args:
             x: Input tensor (B, C, T, D, H, W)
         Returns:
-            x: Encoded features (B, C, D*H*W*T) matching Ver9 format
+            x: Encoded features (B, C, L) where L=D*H*W*T (flattened spatial-temporal)
         """
         # patch embedding
         x = self.patch_embed(x)     # B, L_patched, C_embed_dim
@@ -1308,9 +1307,9 @@ class RoPE4DSwinTransformer_Downstream(nn.Module):
         x = x.permute(0, 2, 1).reshape(b, c, d, h, w, t)
 
         # for decoder: flatten spatial-temporal dims
-        x = x.flatten(start_dim=2)  # B, C, D*H*W*T
+        x = x.flatten(start_dim=2)  # B, C, L where L=D*H*W*T
 
-        return x  # B, C, D*H*W*T (matches Ver9 format)
+        return x  # B, C, L where L=D*H*W*T
 
 
     def forward_decoder(self, x: torch.Tensor): 
@@ -1385,7 +1384,7 @@ class RoPE4DSwinTransformer_Downstream(nn.Module):
         Args:
             x: Input tensor (B, C, D, H, W, T)
         Returns:
-            z: Encoded features (B, C, D, H, W, T)
+            z: Encoded features (B, C, L) where L=D*H*W*T (flattened spatial-temporal)
         """
         # Input x is (B, C, D, H, W, T_in_original_img_size)
         # Need to convert to (B, C, T, D, H, W) for encoder
@@ -1394,7 +1393,7 @@ class RoPE4DSwinTransformer_Downstream(nn.Module):
         if self.to_float:
             x = x.float()
 
-        z = self.forward_encoder(x)   # B, C, D, H, W, T
+        z = self.forward_encoder(x)   # B, C, L where L=D*H*W*T
 
         # Return encoded features for downstream task head
-        return z  # B, C, D, H, W, T 
+        return z  # B, C, L where L=D*H*W*T 

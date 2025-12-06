@@ -36,6 +36,82 @@ class fMRIDataModule(pl.LightningDataModule):
         test_idx = np.where(np.in1d(subj_idx, test_names))[0].tolist()
         return train_idx, val_idx, test_idx
     
+    def get_split_filepath(self, seed, stratified_params):
+        """Get the filepath for a split file based on seed and stratified_params."""
+        base_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+        split_dir = os.path.join(base_dir, "data", "splits", self.hparams.dataset_name)
+
+        if stratified_params:
+            params_str = "_".join(sorted(stratified_params))
+            filename = f"split_fixed_{seed}_stratified_{params_str}.txt"
+        else:
+            filename = f"split_fixed_{seed}.txt"
+
+        return os.path.join(split_dir, filename), split_dir
+
+    def load_split_from_file(self, seed, stratified_params):
+        """Load split from file if it exists.
+
+        Returns:
+            tuple: (train_names, val_names, test_names) if file exists, None otherwise
+        """
+        filepath, _ = self.get_split_filepath(seed, stratified_params)
+
+        if not os.path.exists(filepath):
+            return None
+
+        train_names, val_names, test_names = [], [], []
+        current_section = None
+
+        with open(filepath, "r") as f:
+            for line in f:
+                line = line.strip()
+                if line == "train_subjects":
+                    current_section = "train"
+                elif line == "val_subjects":
+                    current_section = "val"
+                elif line == "test_subjects":
+                    current_section = "test"
+                elif line:  # non-empty line
+                    if current_section == "train":
+                        train_names.append(line)
+                    elif current_section == "val":
+                        val_names.append(line)
+                    elif current_section == "test":
+                        test_names.append(line)
+
+        print(f"[Split Loaded] {filepath}")
+        print(f"  - Train: {len(train_names)}, Val: {len(val_names)}, Test: {len(test_names)}")
+        return train_names, val_names, test_names
+
+    def save_split_to_file(self, train_names, val_names, test_names, seed, stratified_params):
+        """Save split to file for reproducibility.
+
+        File naming:
+        - Without stratified: split_fixed_{seed}.txt
+        - With stratified: split_fixed_{seed}_stratified_{params}.txt
+        """
+        filepath, split_dir = self.get_split_filepath(seed, stratified_params)
+
+        # Create directory if not exists
+        os.makedirs(split_dir, exist_ok=True)
+
+        # Write split to file
+        with open(filepath, "w") as f:
+            f.write("train_subjects\n")
+            for subj in sorted(train_names):
+                f.write(f"{subj}\n")
+            f.write("val_subjects\n")
+            for subj in sorted(val_names):
+                f.write(f"{subj}\n")
+            f.write("test_subjects\n")
+            for subj in sorted(test_names):
+                f.write(f"{subj}\n")
+
+        print(f"[Split Saved] {filepath}")
+        print(f"  - Train: {len(train_names)}, Val: {len(val_names)}, Test: {len(test_names)}")
+        return filepath
+
     def determine_stratified_split(self, subject_dict, seed, stratified_params, metadata_csv_path,
                                 train_split_size=0.7, val_split_size=0.15):
 
@@ -115,20 +191,22 @@ class fMRIDataModule(pl.LightningDataModule):
             features = ['Brightness', 'SaliencyFraction', 'Sharpness', 'Vibrance', 'Loudness', 'Motion', 'Tempo', 'LowLevelChange']
 
             if self.hparams.decoder == 'single_target_decoder':
-                if self.hparams.downstream_task == 'sex': task_name = 'sex'
-                elif self.hparams.downstream_task == 'age': task_name = 'age'
+                if self.hparams.downstream_task == 'sex':
+                    task_name = 'Sex'  # CSV has capital S
+                elif self.hparams.downstream_task == 'age':
+                    task_name = 'Age'  # CSV has capital A
                 else: raise ValueError('downstream task not supported')
-                
-                meta_data = pd.read_csv(os.path.join(self.hparams.image_path, "metadata", "HBN_metadata_240501_CJB.csv"))
-                if task_name == 'sex':
-                    meta_task = meta_data[['SUBJECT_ID',task_name]].dropna()
+
+                meta_data = pd.read_csv("/scratch/connectome/kimbo/SwiFT-IO-4-v9/SwiFT-IO/data_behavior/split_fixed_1.w.Dx.csv")
+                if self.hparams.downstream_task == 'sex':
+                    meta_task = meta_data[['SUBJECT_ID', task_name]].dropna()
                 else:
-                    meta_task = meta_data[['SUBJECT_ID',task_name,'sex']].dropna()
+                    meta_task = meta_data[['SUBJECT_ID', task_name, 'Sex']].dropna()
 
                 for subject in os.listdir(img_root):
                     if subject in meta_task['SUBJECT_ID'].values:
                         target = meta_task[meta_task["SUBJECT_ID"]==subject][task_name].values[0]
-                        sex = meta_task[meta_task["SUBJECT_ID"]==subject]["sex"].values[0]
+                        sex = meta_task[meta_task["SUBJECT_ID"]==subject]["Sex"].values[0]
                         final_dict[subject]=[sex,target]
 
             elif self.hparams.decoder in ['series_decoder', 'lstm_regression_head', 'lstm_series_regression_head']:
@@ -136,7 +214,7 @@ class fMRIDataModule(pl.LightningDataModule):
                 elif self.hparams.downstream_task == 'contents': task_name = contents
                 elif self.hparams.downstream_task == 'features': task_name = features
                 else: raise ValueError('downstream task not supported')
-                
+
                 if self.hparams.downstream_task_type == 'regression' and self.hparams.adjust_hrf == True: # kimbo change
                     task_name = [x + "_conv" for x in task_name]  # kimbo change
                 elif self.hparams.downstream_task_type == 'regression' and self.hparams.adjust_hrf == False:  # kimbo change
@@ -147,19 +225,43 @@ class fMRIDataModule(pl.LightningDataModule):
                     task_name = [x + "_binary" for x in task_name]  # kimbo change
                 else:
                     raise ValueError('downstream task type not supported')
-                
+
                 if self.hparams.input_type == 'movieDM':
                     meta_data = pd.read_csv("/scratch/connectome/kimbo/SwiFT-IO-4-v9/SwiFT-IO/data_behavior/DespicableMe_summary_codes_1.2Hz_intuitivenames_270819.csv") # Updated for classification support
-                    
+
                 elif self.hparams.input_type == 'movieTP':
                     meta_data = pd.read_csv("/scratch/connectome/kimbo/SwiFT-IO-4-v9/SwiFT-IO/data_behavior/ThePresent_summary_codes_1.2Hz_intuitivenames_260120.csv")
-                meta_task = meta_data[task_name + ['frame']].dropna() 
-                
+                meta_task = meta_data[task_name + ['frame']].dropna()
+
 
                 for subject in os.listdir(img_root):
                         sex = 1 # arbitrary value, not used
                         target = meta_task[task_name].values
                         target = target[np.argsort(meta_task['frame'].values)]
+                        final_dict[subject] = (sex, target)
+
+            elif self.hparams.decoder == 'averaged_series_decoder':
+                # For subject-level predictions (e.g., Sex, Age) using averaged series decoder
+                if self.hparams.downstream_task == 'sex':
+                    task_name = 'Sex'
+                elif self.hparams.downstream_task == 'age':
+                    task_name = 'Age'
+                else:
+                    raise ValueError(f'downstream task {self.hparams.downstream_task} not supported for averaged_series_decoder')
+
+                # Load subject metadata from split CSV (contains Sex, Age, etc.)
+                metadata_path = "/scratch/connectome/kimbo/SwiFT-IO-4-v9/SwiFT-IO/data_behavior/split_fixed_1.w.Dx.csv"
+                meta_data = pd.read_csv(metadata_path)
+                meta_data['SUBJECT_ID'] = meta_data['SUBJECT_ID'].astype(str)
+
+                # Create subject dict with target values
+                for subject in os.listdir(img_root):
+                    if subject in meta_data['SUBJECT_ID'].values:
+                        # Get the target value for this subject
+                        target = meta_data[meta_data['SUBJECT_ID'] == subject][task_name].values[0]
+                        # For averaged_series_decoder, sex is not used separately, target is the label
+                        # But we keep the (sex, target) format for compatibility
+                        sex = target if task_name == 'Sex' else meta_data[meta_data['SUBJECT_ID'] == subject]['Sex'].values[0]
                         final_dict[subject] = (sex, target)
         
         return final_dict
@@ -185,12 +287,27 @@ class fMRIDataModule(pl.LightningDataModule):
                 "input_offset": self.hparams.input_offset} # kimbo change
         
         subject_dict = self.make_subject_dict()
-        
-        metadata_csv_path = "/scratch/connectome/kimbo/SwiFT-IO-4-v9/SwiFT-IO/data_behavior/split_fixed_1.w.Dx.csv"
-        # now split the data
-        train_names, val_names, test_names = self.determine_stratified_split(subject_dict, self.hparams.dataset_split_seed, self.hparams.stratified_params,
-                                                                             metadata_csv_path, self.hparams.train_split, self.hparams.val_split)
-                
+
+        # Try to load existing split file first
+        loaded_split = self.load_split_from_file(self.hparams.dataset_split_seed, self.hparams.stratified_params)
+
+        if loaded_split is not None:
+            # Use existing split
+            train_names, val_names, test_names = loaded_split
+        else:
+            # Generate new split
+            metadata_csv_path = "/scratch/connectome/kimbo/SwiFT-IO-4-v9/SwiFT-IO/data_behavior/split_fixed_1.w.Dx.csv"
+            train_names, val_names, test_names = self.determine_stratified_split(
+                subject_dict, self.hparams.dataset_split_seed, self.hparams.stratified_params,
+                metadata_csv_path, self.hparams.train_split, self.hparams.val_split)
+
+            # Save split to file (only on rank 0 in DDP to avoid conflicts)
+            global_rank = int(os.environ.get("GLOBAL_RANK", os.environ.get("LOCAL_RANK", 0)))
+            if global_rank == 0:
+                self.save_split_to_file(train_names, val_names, test_names,
+                                        self.hparams.dataset_split_seed,
+                                        self.hparams.stratified_params)
+
         if self.hparams.bad_subj_path:
             bad_subjects = open(self.hparams.bad_subj_path, "r").readlines()
             for bad_subj in bad_subjects:

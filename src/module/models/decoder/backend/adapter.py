@@ -28,6 +28,38 @@ class SeriesClassificationOutputAdapter(OutputAdapter):
         else:
             return x # (batch_size, time_sequence, num_targets, num_classes) for classification
 
+class AveragedSeriesOutputAdapter(OutputAdapter):
+    """Adapter that averages series outputs over time for single target prediction (e.g., Sex).
+
+    Takes series decoder output and averages over the time dimension to produce
+    a single prediction per batch item.
+    """
+    def __init__(
+        self,
+        num_classes: int,
+        num_output_query_channels: int,
+        num_targets: int = 1,  # For sex classification, typically 1 target
+        downstream_task_type: str = 'classification'
+    ):
+        super().__init__()
+        self.num_targets = num_targets
+        self.downstream_task_type = downstream_task_type
+        self.linear = nn.Linear(num_output_query_channels, num_classes * num_targets)
+
+    def forward(self, x):
+        # x shape: (batch_size, num_queries, num_output_query_channels)
+        x = self.linear(x)  # (batch_size, num_queries, num_classes*num_targets)
+        x = rearrange(x, 'b t (ta c) -> b t ta c', ta=self.num_targets)  # (batch, time, targets, classes)
+
+        # Average over time dimension
+        x = x.mean(dim=1)  # (batch, targets, classes)
+
+        # For single target (like sex), squeeze the target dimension
+        if self.num_targets == 1:
+            x = x.squeeze(dim=1)  # (batch, classes)
+
+        return x
+
 class ClassificationOutputAdapter(OutputAdapter):
     def __init__(
         self,

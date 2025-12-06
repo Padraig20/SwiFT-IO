@@ -2,8 +2,8 @@ from typing import Optional
 
 import torch.nn as nn
 
-from module.models.decoder.backend.adapter import SeriesClassificationOutputAdapter, TrainableQueryProvider
-from module.models.decoder.backend.modules import PerceiverDecoder
+from .backend.adapter import SeriesClassificationOutputAdapter, TrainableQueryProvider
+from .backend.modules import PerceiverDecoder
 
 class SeriesDecoder(nn.Module):
     def __init__(self,

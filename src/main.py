@@ -31,24 +31,25 @@ class CustomModelCheckpoint(ModelCheckpoint):
     def on_save_checkpoint(self, trainer, pl_module, checkpoint):
         checkpoint_path = self.best_model_path  # 최고 성능 체크포인트 경로
         print(f"Checkpoint path: {checkpoint_path}")
-        
+
+        # wandb artifact 업로드 비활성화 (디스크 공간 문제로 인해)
         # Best performance metric (valid_acc or valid_mse)
-        best_metric = trainer.callback_metrics.get('valid_acc') if 'valid_acc' in trainer.callback_metrics else trainer.callback_metrics.get('valid_mse')
-        
-        artifact = wandb.Artifact('best_model', type='model')
+        # best_metric = trainer.callback_metrics.get('valid_acc') if 'valid_acc' in trainer.callback_metrics else trainer.callback_metrics.get('valid_mse')
 
-        if os.path.isfile(checkpoint_path):
-            artifact.add_file(checkpoint_path)  # 체크포인트 파일 추가
+        # artifact = wandb.Artifact('best_model', type='model')
 
-            # Add metadata with performance metrics
-            artifact.metadata = {
-                'valid_acc': best_metric,  # valid_acc or valid_mse depending on task
-                'epoch': trainer.current_epoch
-            }
+        # if os.path.isfile(checkpoint_path):
+        #     artifact.add_file(checkpoint_path)  # 체크포인트 파일 추가
 
-            wandb.log_artifact(artifact)  # 아티팩트로 로깅
-        else:
-            print(f"Checkpoint path is not a valid file: {checkpoint_path}")
+        #     # Add metadata with performance metrics
+        #     artifact.metadata = {
+        #         'valid_acc': best_metric,  # valid_acc or valid_mse depending on task
+        #         'epoch': trainer.current_epoch
+        #     }
+
+        #     wandb.log_artifact(artifact)  # 아티팩트로 로깅
+        # else:
+        #     print(f"Checkpoint path is not a valid file: {checkpoint_path}")
         return super().on_save_checkpoint(trainer, pl_module, checkpoint)
     
     
@@ -147,8 +148,11 @@ def cli_main():
     # log_every_n_steps = 50 if log_every_n_steps > 50 else log_every_n_steps
     # print("log_every_n_steps:",log_every_n_steps)
 
-
-    if args.loggername == "tensorboard":
+    # Skip logger for test_only mode
+    if args.test_only:
+        logger = False
+        dirpath = args.default_root_dir
+    elif args.loggername == "tensorboard":
         # logger = True  # tensor board is a default logger of Trainer class
         dirpath = args.default_root_dir
         logger = TensorBoardLogger(dirpath)

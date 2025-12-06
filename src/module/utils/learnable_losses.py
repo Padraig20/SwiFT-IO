@@ -343,7 +343,7 @@ class NormalizedFocalMSELoss(nn.Module):
     - Normalized: focal_weight = (1 + mse/(|target| + eps))^gamma
 
     Benefits:
-    1. Scale-invariant: Works well across different emotion value ranges (e.g., Positive: 0-27, Sad: 0-5)
+    1. Scale-invariant: Works well across different emotion value ranges (e.g., Sad: 0-27, Positive: 0-7.4)
     2. Fair weighting: Large errors on small targets get same attention as large errors on large targets
     3. Prevents bias toward high-magnitude emotions
 

@@ -176,7 +176,7 @@ class LitClassifier(pl.LightningModule):
                 print("Using Normalized Focal MSE Loss (Scale-Robust)")
                 print(f"  Gamma: {self.hparams.get('focal_gamma', 1.0)}")
                 print(f"  Epsilon: {self.hparams.get('focal_eps', 1e-6)}")
-                print(f"  Scale-invariant: Handles different emotion ranges (Positive: 0-27, Sad: 0-5)")
+                print(f"  Scale-invariant: Handles different emotion ranges (Sad: 0-27, Positive: 0-7.4)")
                 print(f"{'='*80}\n")
                 self.learnable_loss = NormalizedFocalMSELoss(
                     gamma=self.hparams.get('focal_gamma', 1.0),
@@ -579,8 +579,13 @@ class LitClassifier(pl.LightningModule):
                     # Overall metrics (original behavior)
                     mse_group = F.mse_loss(logits_flat, target_flat)
                     mae_group = F.l1_loss(logits_flat, target_flat)
-                    pearson_coef_group = pearson(logits_flat, target_flat)
-                    r2_group = r2_score(logits_flat, target_flat)
+                    # R2 and Pearson require at least 2 samples
+                    if len(logits_flat) >= 2:
+                        pearson_coef_group = pearson(logits_flat, target_flat)
+                        r2_group = r2_score(logits_flat, target_flat)
+                    else:
+                        pearson_coef_group = torch.tensor(0.0)
+                        r2_group = torch.tensor(0.0)
 
                     # Adjusted metrics (original scale)
                     if self.hparams.label_scaling_method == 'standardization': # default
@@ -598,8 +603,17 @@ class LitClassifier(pl.LightningModule):
                     target_np = target_flat.cpu().numpy()
                     logits_np = logits_flat.cpu().numpy()
 
-                    # Create masks
-                    mask_zero = (target_np == 0)
+                    # Create masks using ORIGINAL scale (not scaled values!)
+                    # Bug fix: scaled values are never exactly 0, so we need to inverse transform
+                    if self.hparams.label_scaling_method == 'standardization':
+                        target_original = target_np * self.scaler.scale_[0] + self.scaler.mean_[0]
+                    elif self.hparams.label_scaling_method == 'minmax':
+                        target_original = target_np * (self.scaler.data_max_[0] - self.scaler.data_min_[0]) + self.scaler.data_min_[0]
+                    else:
+                        target_original = target_np
+
+                    # Use small epsilon for floating point comparison
+                    mask_zero = (np.abs(target_original) < 1e-6)
                     mask_nonzero = ~mask_zero
 
                     n_total = len(target_np)
