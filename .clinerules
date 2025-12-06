@@ -1,81 +1,168 @@
-# Claude Code Project Rules for SwiFT-IO
-# This file configures automatic permissions and behaviors for Claude Code
+# SwiFT-IO Project Rules for Claude Code
 
-## Automatic Tool Permissions
+## 🎯 프로젝트 개요
+**SwiFT-IO**: fMRI 데이터로 영화 시청 중 감정 예측 (Transformer 기반)
+- 데이터셋: HBN movieDM task
+- Task: 7가지 감정 (Anger, Happy, Fear, Sad, Excited, Positive, Negative)
+- 방식: regression 또는 classification
 
-### Git Operations (Always Allowed)
-# Allow all git operations without asking
-- git status
-- git diff
-- git log
-- git add (any files in src/, docs/, igmap/)
-- git commit (with proper commit messages)
-- git push (to current branch)
+## 💬 의사소통 규칙 (CRITICAL)
 
-### SLURM Operations (Always Allowed)
-# Job management
-- sbatch (submit jobs)
-- squeue (check job status)
-- scancel (cancel jobs)
-- scontrol (job control)
+### ✅ 필수 - 항상 적용
+1. **한글로 답변** (코드와 기술 용어는 영어 유지)
+2. **코드는 100% 영어** (변수명, 함수명, 주석, docstring 모두)
+3. **간결하고 친근하게** (존댓말 사용, 불필요한 설명 최소화)
 
-### File Operations in Project Directory
-# Allow read/write in these directories without asking
-- Read any files in: src/, docs/, igmap/, sample_scripts/, logs/
-- Write/Edit files in: src/, docs/, igmap/
-- Create new files in: src/module/utils/, docs/analysis/, sample_scripts/
+### 코드 스타일
+```python
+# ✅ GOOD - 영어 변수명, 영어 docstring
+def train_svc_baseline(X_train, y_train, n_components=100):
+    """Train SVC classifier with PCA reduction."""
+    pass
 
-### Python/Conda Operations (Always Allowed)
-- python -c (quick tests)
-- python -m (module execution)
-- conda activate/deactivate
-- pip install (with confirmation for non-dev packages)
+# ❌ BAD - 한글 변수명 절대 금지
+def svc_학습(데이터, 라벨):
+    """SVC 분류기를 학습합니다."""
+    pass
+```
 
-### Log/Output Monitoring (Always Allowed)
-- tail (log files)
-- cat (log files)
-- grep (searching logs)
-- ls (listing directories)
+## 🖥️ 컴퓨팅 환경
 
-## Restricted Operations (Always Ask)
-# These operations require explicit user confirmation
-- rm -rf (recursive deletion)
-- chmod/chown (permission changes on system files)
-- sudo (any sudo command)
-- git push --force
-- Modifying files outside project directory
+### 서버 노드 (실제 구성)
+- **node1**: 8x RTX A5000 (⚠️ NFS 문제 가능 - 주의)
+- **node2**: 8x RTX 3090
+- **node3**: 8x RTX 3090 (✅ 주로 사용, 안정적)
+- **node4**: CPU/GPU 혼합
 
-## Experiment Tracking
-# Automatically add these tags to wandb runs
-- loss_type (regression_loss_type value)
-- sequence_length (seq{N})
-- experiment_name
+### Conda 환경 (CRITICAL)
+- **환경명**: `swiftio` (❌ `swiftv9` 절대 아님!)
+- **활성화**: `source ~/.bashrc && conda activate swiftio`
+- **Python 실행 규칙**:
+  ```bash
+  # ✅ CORRECT
+  source ~/.bashrc && conda activate swiftio && python script.py
 
-## Code Style Preferences
-- Use type hints in Python
-- Add docstrings for new functions/classes
-- Keep commit messages clear and descriptive
-- Use descriptive variable names (no single letters except i,j,k in loops)
+  # ❌ WRONG - conda 없이 실행 금지
+  python script.py
+  ```
 
-## Development Workflow
-1. Always read files before editing
-2. Run quick tests after major changes
-3. Commit working code frequently
-4. Use meaningful branch names
-5. Add inline comments for complex logic
+### SLURM Job 제출 규칙
+1. **시간 제한**: 최소 24h, 보통 48-72h (`-t 72:00:00`)
+2. **num_workers**: 0~4 (❌ 8 이상은 shared memory 에러)
+3. **노드 선택**: node1 문제 시 node2/node3 사용
+4. **GPU**: `--gres=gpu:1` (단일 GPU)
+5. **메모리**: regression 40GB, classification 20GB
+6. **로그**: `-o logs/%A-%x.o` 형식 사용
 
-## Project-Specific Notes
-- Default node: node3 (node1 has issues)
-- Default epochs: 30 (for quick experiments)
-- Main branch: main
-- Current dev branch: kimbo-labserver-swiftv9
-- WandB project: moviefmri
+## 📊 주요 경로
 
-## Data Paths
-- fMRI data: /scratch/HBN/3.3.1.movieDM_MNI_to_TRs_smooth_znorm_241120
-- Logs: /scratch/connectome/kimbo/SwiFT-IO-4-v9/SwiFT-IO/logs/
-- Outputs: output/moviefmri/
+```bash
+# fMRI 전처리 데이터
+/scratch/HBN/3.3.1.movieDM_MNI_to_TRs_smooth_znorm_241120/
 
-## Contact
-- User: kimbo
-- Project: SwiFT-IO emotion regression from fMRI
+# 로그 디렉토리
+/scratch/connectome/kimbo/SwiFT-IO-4-v9/SwiFT-IO/logs/
+
+# WandB 출력
+output/moviefmri/
+```
+
+## 📝 작업 흐름 (Workflow)
+
+### 복잡한 작업 시 (3단계 이상)
+1. **TodoWrite 필수 사용**
+2. **각 단계 완료 시 즉시 업데이트** (배치 처리 금지)
+3. **in_progress는 항상 1개만** (동시 진행 금지)
+4. **완료되면 즉시 completed로 변경**
+
+### Job 제출 전 체크리스트
+1. ✅ Import 테스트 (`/quick-test` 또는 직접)
+2. ✅ 로그 디렉토리 존재 확인 (`logs/`)
+3. ✅ 한 번에 하나씩 제출 (첫 job 로그 확인 후 다음)
+4. ✅ WandB API key 환경변수 확인
+
+### 에러 발생 시
+1. **로그 먼저**: `tail -50 logs/<JOB_ID>-<NAME>.o`
+2. **작은 단계로**: 한 번에 하나씩 수정
+3. **재현 테스트**: 작은 데이터로 검증
+
+## 🚨 절대 금지 사항
+
+### ❌ Never Do
+1. WandB API key 없이 `--loggername wandb` 사용
+2. `num_workers > 4` 설정 (shared memory 에러)
+3. Conda 환경 이름 오타 (`swiftio` 정확히!)
+4. SLURM 시간 제한 24h 미만
+5. node1 문제 인지 후에도 계속 사용
+6. **코드에 한글 변수명/주석 사용**
+7. rm -rf 무분별한 사용
+8. git push --force to main
+
+## ⚠️ 자주 발생하는 에러 해결
+
+```bash
+# Bus error / Shared memory
+→ num_workers=0 설정
+
+# WandB login error
+→ WANDB_API_KEY 환경변수 확인
+
+# DataLoader worker crash
+→ num_workers 감소 (4→2→0)
+
+# NFS I/O hang (node1)
+→ 다른 노드로 변경 (node3 권장)
+
+# unrecognized arguments
+→ argparse에 해당 argument 추가 확인
+```
+
+## 🛠️ 자동 허용 작업 (권한 확인 불필요)
+
+### SLURM
+- sbatch, squeue, scancel, scontrol, sacct
+
+### Git
+- git status, diff, log, add, commit, push (현재 브랜치)
+
+### 파일 작업
+- Read: src/, docs/, igmap/, sample_scripts/, logs/
+- Write: src/, docs/, igmap/, sample_scripts/
+- Edit: 모든 Python 파일
+
+### 시스템 모니터링
+- tail, cat, grep, ls, find, ps, nvidia-smi, ssh
+
+### Python/Conda
+- python (모든 python 스크립트 실행)
+- python -c, python -m, conda activate/deactivate
+- python <<'EOF' (heredoc 방식 스크립트 실행)
+
+## 🎓 효율성 팁
+
+1. **병렬 Tool 호출**: 독립적인 작업은 한 메시지에서 동시 실행
+2. **Context 절약**: 큰 파일은 필요한 부분만 읽기
+3. **슬래시 커맨드 활용**:
+   - `/check-jobs`: job 상태 + 최근 로그
+   - `/cancel-job <ID>`: job 취소 + 확인
+   - `/quick-test`: import 테스트
+   - `/baseline-status`: baseline 진행 상황
+
+## 📚 참고 문서
+
+- `.claude/CODE_OF_CONDUCT.md`: 상세 규칙 및 컨텍스트
+- `.claude/commands/`: 슬래시 커맨드 정의
+- `docs/baselines/`: 베이스라인 성능 테이블
+
+## 🔧 프로젝트 설정
+
+- **User**: kimbo
+- **Main branch**: main
+- **Dev branch**: kimbo-labserver-swiftv9
+- **WandB project**: moviefmri
+- **Default node**: node3 (node1 문제 시)
+- **Conda env**: swiftio
+
+---
+
+**핵심 원칙**: 한글 응답, 코드 영어, TodoWrite 사용, 일관성 유지
