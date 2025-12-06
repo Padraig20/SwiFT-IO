@@ -3,9 +3,7 @@
 Select sequences with peak emotion values for each of 7 emotions.
 These sequences are model-agnostic (based on ground truth targets only).
 
-Run ID: opr6oq97
-Sequence length: 30 TRs
-Output: 5-10 sequences per emotion
+Supports both regression and classification models with flexible sequence lengths.
 """
 
 import sys
@@ -23,7 +21,7 @@ from module.utils.data_module import fMRIDataModule
 # 7 emotions
 emotion_labels = ['Anger', 'Happy', 'Fear', 'Sad', 'Excited', 'Positive', 'Negative']
 
-def select_peak_sequences(run_id='opr6oq97', top_k=10, subject_list=None):
+def select_peak_sequences(run_id='opr6oq97', top_k=10, subject_list=None, task_type=None):
     """
     Select sequences with peak values for each emotion.
 
@@ -31,20 +29,34 @@ def select_peak_sequences(run_id='opr6oq97', top_k=10, subject_list=None):
         run_id: Model run ID (used to load checkpoint config)
         top_k: Number of top sequences to select per emotion
         subject_list: Optional list of subjects to process. If None, process all test subjects.
+        task_type: 'regression' or 'classification'. If None, inferred from checkpoint.
     """
     print("="*70)
     print(f"Selecting Emotion Peak Sequences - Run ID: {run_id}")
     print(f"Top K sequences per emotion: {top_k}")
+    if task_type:
+        print(f"Task type: {task_type}")
     print("="*70)
 
     # Load checkpoint to get configuration
-    ckpt_path = project_root / f"output/moviefmri/{run_id}/checkpt-epoch=07-valid_mse=0.05.ckpt"
-    if not ckpt_path.exists():
-        ckpt_path = list((project_root / f"output/moviefmri/{run_id}").glob("checkpt*"))[0]
+    ckpt_dir = project_root / f"output/moviefmri/{run_id}"
+    ckpt_files = list(ckpt_dir.glob("checkpt*.ckpt"))
+    if not ckpt_files:
+        raise FileNotFoundError(f"No checkpoint found in {ckpt_dir}")
+
+    # Use the latest checkpoint
+    ckpt_path = sorted(ckpt_files)[-1]
 
     print(f"\n✅ Loading checkpoint config: {ckpt_path.name}")
     ckpt = torch.load(ckpt_path, map_location="cpu")
     args_model_dict = ckpt['hyper_parameters']
+
+    # Infer task type from checkpoint if not provided
+    if task_type is None:
+        task_type = args_model_dict.get('downstream_task_type', 'regression')
+
+    print(f"   Task type: {task_type}")
+    print(f"   Sequence length: {args_model_dict.get('sequence_length', 'N/A')} TRs")
 
     # Setup data module
     args_model_dict["num_workers"] = 0
@@ -59,6 +71,9 @@ def select_peak_sequences(run_id='opr6oq97', top_k=10, subject_list=None):
     args_model_dict['downstream_task'] = 'emotions'
     args_model_dict['decoder'] = 'series_decoder'
 
+    # Always use regression task to get continuous emotion values (even for classification models)
+    args_model_dict['downstream_task_type'] = 'regression'
+
     if 'dataset_split_seed' not in args_model_dict:
         args_model_dict['dataset_split_seed'] = args_model_dict.get('seed', 777)
     if 'stratified_params' not in args_model_dict:
@@ -68,7 +83,12 @@ def select_peak_sequences(run_id='opr6oq97', top_k=10, subject_list=None):
     if 'val_split' not in args_model_dict:
         args_model_dict['val_split'] = 0.15
 
+    seq_length = args_model_dict.get('sequence_length', 30)
+
     print("\n🚀 Initializing data module...")
+    print(f"   Using regression targets (continuous values)")
+    print(f"   Sequence length: {seq_length} TRs")
+
     data_module = fMRIDataModule(**args_model_dict)
     data_module.prepare_data()
     data_module.setup(stage='test')
@@ -121,7 +141,7 @@ def select_peak_sequences(run_id='opr6oq97', top_k=10, subject_list=None):
             if torch.is_tensor(target):
                 target = target.numpy()
 
-            # Calculate average score for each emotion over the 30 TRs
+            # Calculate average score for each emotion over the sequence
             for emotion_idx, emotion_name in enumerate(emotion_labels):
                 avg_score = np.mean(target[:, emotion_idx])
 
@@ -164,7 +184,10 @@ def select_peak_sequences(run_id='opr6oq97', top_k=10, subject_list=None):
         all_subject_results[subject] = subject_top_sequences
 
     # Save results
-    output_dir = project_root / f"analysis/4_IGmap/emotion_peak_sequences"
+    if task_type == 'classification':
+        output_dir = project_root / f"analysis/4_IGmap/clf_emotion_peak_sequences"
+    else:
+        output_dir = project_root / f"analysis/4_IGmap/emotion_peak_sequences"
     output_dir.mkdir(parents=True, exist_ok=True)
 
     # Save full results
@@ -172,8 +195,9 @@ def select_peak_sequences(run_id='opr6oq97', top_k=10, subject_list=None):
     with open(output_path, 'w') as f:
         json.dump({
             'run_id': run_id,
+            'task_type': task_type,
             'top_k': top_k,
-            'sequence_length': 30,
+            'sequence_length': seq_length,
             'emotion_labels': emotion_labels,
             'subjects': all_subject_results
         }, f, indent=2)
@@ -193,17 +217,21 @@ def select_peak_sequences(run_id='opr6oq97', top_k=10, subject_list=None):
 if __name__ == '__main__':
     import argparse
     parser = argparse.ArgumentParser()
-    parser.add_argument('--run_id', type=str, default='opr6oq97')
+    parser.add_argument('--run_id', type=str, default='opr6oq97',
+                       help='Model run ID (e.g., opr6oq97 for regression, mc3r4vhf for classification)')
     parser.add_argument('--top_k', type=int, default=10,
                        help='Number of top sequences to select per emotion (default: 10)')
     parser.add_argument('--subjects', type=str, nargs='+', default=None,
                        help='Specific subjects to process (default: all test subjects)')
+    parser.add_argument('--task_type', type=str, choices=['regression', 'classification'], default=None,
+                       help='Task type: regression or classification (default: infer from checkpoint)')
     args = parser.parse_args()
 
     results = select_peak_sequences(
         run_id=args.run_id,
         top_k=args.top_k,
-        subject_list=args.subjects
+        subject_list=args.subjects,
+        task_type=args.task_type
     )
 
     print("\n" + "="*70)

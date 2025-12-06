@@ -38,6 +38,7 @@ def init_model_and_data(ckpt_path_str, args_model_dict, project_root):
     args_model_dict['bad_subj_path'] = None
     args_model_dict['limit_training_samples'] = 0
     args_model_dict['downstream_task'] = 'emotions'
+    args_model_dict['downstream_task_type'] = 'classification'
     args_model_dict['decoder'] = 'series_decoder'
 
     # Add missing data module parameters
@@ -65,12 +66,22 @@ def compute_ig_on_prediction_average(input_ts, baseline, i, n_steps=10):
     """
     Compute Integrated Gradients for classification task.
     We compute gradients w.r.t. positive class (class 1) logits for emotion i.
+
+    Args:
+        input_ts: Input fMRI sequence [1, C, X, Y, Z, T]
+        baseline: Baseline fMRI sequence [1, C, X, Y, Z, T]
+        i: Emotion index (0-6)
+        n_steps: Number of IG steps
+
+    Returns:
+        Integrated gradients [1, C, X, Y, Z, T]
     """
     global model
     alphas = torch.linspace(0, 1.0, steps=n_steps).view(-1, 1, 1, 1, 1, 1).to(input_ts.device)
     delta = input_ts - baseline
     scaled_inputs = baseline + alphas * delta
     grads = []
+
     for step_idx, s_input in enumerate(scaled_inputs):
         s_input = s_input.unsqueeze(0).requires_grad_(True)
         output = model(s_input)  # [1, time, 7, 2] - logits for binary classification
@@ -88,10 +99,12 @@ def compute_ig_on_prediction_average(input_ts, baseline, i, n_steps=10):
             # Select positive class logits for emotion i and average over time
             scalar = output[:, :, i, 1].mean()  # Average positive class logits over time
         else:
-            raise ValueError(f"Unexpected output shape for classification: {output.shape}")
+            raise ValueError(f"Unexpected output shape for classification: {output.shape}. "
+                           f"Expected [batch, time, 7, 2]")
 
         grad = torch.autograd.grad(outputs=scalar, inputs=s_input)[0]
         grads.append(grad)
+
     avg_grads = torch.stack(grads).mean(dim=0)
     integrated_grads = delta * avg_grads
     return integrated_grads.detach()
@@ -151,77 +164,81 @@ def process_subject(args_tuple):
                 TR_index = int(data['TR'])
                 input_ts = data['fmri_sequence'].float().cpu()  # [B, C, X, Y, Z, T]
 
-                print(f"\n  Rank {rank}: TR{seq_info['start_frame']:03d}-{seq_info['end_frame']:03d} "
-                      f"(avg: {seq_info['avg_score']:.3f})", flush=True)
+                print(f"\n🔍 Rank {rank}/{len(peak_sequences)} | Seq {seq_idx} | "
+                      f"TR {TR_index:03d}-{TR_index + input_ts.shape[-1] - 1:03d} | "
+                      f"Avg Prob: {seq_info.get('avg_prob', 0):.4f}", flush=True)
 
-                # ========== BASELINE SELECTION ==========
+                # Create baseline
                 if args.baseline == 'zeros':
                     baseline = torch.zeros_like(input_ts)
-                    print(f"  [Baseline] zeros, shape: {baseline.shape}", flush=True)
                 elif args.baseline == 'first_10sec':
-                    # Average first 10 TRs (first 10 seconds)
-                    first_10_trs = input_ts[:, :, :, :, :, :10]  # [B, C, X, Y, Z, 10]
-                    baseline_avg = first_10_trs.mean(dim=-1, keepdim=True)  # [B, C, X, Y, Z, 1]
-                    baseline = baseline_avg.expand_as(input_ts)  # [B, C, X, Y, Z, T]
-                    print(f"  [Baseline] first 10 TRs average, shape: {baseline.shape}", flush=True)
+                    baseline = input_ts.clone()
+                    baseline[:, :, :, :, :, 5:] = 0
                 else:
                     raise ValueError(f"Unknown baseline: {args.baseline}")
-                # =========================================
-
-                out_dir = project_root / f"analysis/4_IGmap/baseline_{args.baseline}_selective/{args.run_id}/nii_segments" / subject / f"target{emotion_idx}_{emotion_name}"
-                out_dir.mkdir(parents=True, exist_ok=True)
 
                 # Compute IG
-                result = compute_ig_on_prediction_average(input_ts, baseline, i=emotion_idx, n_steps=args.n_steps)
-                # result shape: [B, C, X, Y, Z, T]
-                result_tensor = result[0, 0, :, :, :, :]  # [X, Y, Z, T]
+                seq_start = time.time()
+                ig = compute_ig_on_prediction_average(
+                    input_ts,
+                    baseline,
+                    emotion_idx,
+                    n_steps=args.n_steps
+                )
+                seq_duration = time.time() - seq_start
 
-                # Average over time: positive and negative
-                pos_mask = (result_tensor > 0).float()
-                neg_mask = (result_tensor < 0).float()
-                pos_sum = (result_tensor * pos_mask).sum(dim=-1)
-                pos_count = pos_mask.sum(dim=-1) + 1e-8
-                avgpred_positive = pos_sum / pos_count
+                # Sum over time dimension and channel
+                ig_spatial = ig.squeeze(0).sum(dim=(0, -1)).numpy()  # [X, Y, Z]
 
-                neg_sum = (result_tensor * neg_mask).sum(dim=-1)
-                neg_count = neg_mask.sum(dim=-1) + 1e-8
-                avgpred_negative = neg_sum / neg_count
+                # Save as NIfTI
+                output_dir = project_root / f"analysis/4_IGmap/clf_results/{args.run_id}/{args.baseline}/{emotion_name}"
+                output_dir.mkdir(parents=True, exist_ok=True)
 
-                # Save with rank information
-                out_path_pos = out_dir / f"{subject}_{emotion_name}_TR{TR_index:03d}_rank{rank:02d}_AVGpred_positive.nii.gz"
-                out_path_neg = out_dir / f"{subject}_{emotion_name}_TR{TR_index:03d}_rank{rank:02d}_AVGpred_negative.nii.gz"
-                nib.save(nib.Nifti1Image(avgpred_positive.cpu().numpy(), affine), out_path_pos)
-                nib.save(nib.Nifti1Image(avgpred_negative.cpu().numpy(), affine), out_path_neg)
-                print(f"  ✅ [IG OK] {subject} - {emotion_name} TR{TR_index:03d} rank{rank} (baseline={args.baseline})", flush=True)
+                nii_path = output_dir / f"{subject}_rank{rank}_seq{seq_idx}_TR{TR_index:03d}.nii.gz"
+                nii = nib.Nifti1Image(ig_spatial, affine)
+                nib.save(nii, str(nii_path))
 
+                print(f"✅ Saved: {nii_path.name} ({seq_duration:.1f}s)", flush=True)
                 total_sequences_processed += 1
 
-    elapsed = time.time() - overall_start
+    overall_duration = time.time() - overall_start
     print(f"\n{'='*70}", flush=True)
     print(f"✅ Subject {subject} complete!", flush=True)
-    print(f"   Total sequences processed: {total_sequences_processed}", flush=True)
-    print(f"   Total time: {elapsed:.2f}s ({elapsed/60:.2f} min)", flush=True)
+    print(f"   Total sequences: {total_sequences_processed}", flush=True)
+    print(f"   Total time: {overall_duration:.1f}s", flush=True)
     print(f"{'='*70}", flush=True)
 
-if __name__ == '__main__':
+def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--run_id', type=str, required=True, help='Model run ID (classification)')
-    parser.add_argument('--subjects', type=str, nargs='+', required=True,
-                       help='List of subjects to process')
-    parser.add_argument('--baseline', type=str, required=True, choices=['zeros', 'first_10sec'],
-                       help='Baseline type: zeros or first_10sec')
+    parser.add_argument('--subjects', type=str, nargs='+', required=True, help='Subject names')
+    parser.add_argument('--baseline', type=str, required=True, choices=['zeros', 'first_10sec'])
     parser.add_argument('--emotions', type=str, nargs='+', default=None,
-                       help='Specific emotions to process (default: all 7 emotions)')
+                       help='Specific emotions to process (default: all)')
     parser.add_argument('--top_k_seqs', type=int, default=5,
-                       help='Number of top sequences to process per emotion (default: 5)')
+                       help='Number of top sequences to process per emotion')
     parser.add_argument('--specific_seqs', type=int, nargs='+', default=None,
                        help='Specific sequence indices to process (overrides top_k_seqs)')
-    parser.add_argument('--n_steps', type=int, default=20,
-                       help='Number of IG steps (default: 20)')
-    parser.add_argument('--project_root', type=str, default='/scratch/connectome/kimbo/SwiFT-IO-4-v9/SwiFT-IO')
+    parser.add_argument('--n_steps', type=int, default=20, help='IG steps')
+    parser.add_argument('--project_root', type=str,
+                       default='/scratch/connectome/kimbo/SwiFT-IO-4-v9/SwiFT-IO')
     args = parser.parse_args()
 
     project_root = Path(args.project_root)
+    sys.path.append(str(project_root / "src"))
+
+    print("="*70)
+    print(f"IG Map Generation - CLASSIFICATION")
+    print(f"Run ID: {args.run_id}")
+    print(f"Baseline: {args.baseline}")
+    print(f"Subjects: {args.subjects}")
+    print(f"Emotions: {args.emotions if args.emotions else 'all'}")
+    if args.specific_seqs:
+        print(f"Specific sequences: {args.specific_seqs}")
+    else:
+        print(f"Top K seqs per emotion: {args.top_k_seqs}")
+    print(f"IG steps: {args.n_steps}")
+    print("="*70)
 
     # Load checkpoint
     ckpt_path = project_root / f"output/moviefmri/{args.run_id}/checkpt-epoch=08-valid_acc=1.00.ckpt"
@@ -231,36 +248,21 @@ if __name__ == '__main__':
             raise FileNotFoundError(f"No checkpoint found for {args.run_id}")
         ckpt_path = ckpt_files[0]
 
-    ckpt = torch.load(ckpt_path, map_location="cpu")
+    print(f"\n✅ Found checkpoint: {ckpt_path.name}")
+
+    # Load peak sequences
+    peak_seq_file = project_root / f"analysis/4_IGmap/clf_emotion_peak_sequences/{args.run_id}_emotion_peak_sequences_top10.json"
+    if not peak_seq_file.exists():
+        raise FileNotFoundError(f"Peak sequences file not found: {peak_seq_file}")
+
+    with open(peak_seq_file) as f:
+        peak_data = json.load(f)
+
+    print(f"✅ Loaded peak sequences from: {peak_seq_file.name}")
+
+    # Initialize model
+    ckpt = torch.load(str(ckpt_path), map_location="cpu")
     args_model_dict = ckpt['hyper_parameters']
-
-    print(f"{'='*70}")
-    print(f"IG Map Generation - CLASSIFICATION")
-    print(f"{'='*70}")
-    print(f"✅ Loaded checkpoint: {ckpt_path.name}")
-    print(f"   Run ID: {args.run_id}")
-    print(f"   Baseline type: {args.baseline}")
-    print(f"   seq_len={args_model_dict.get('sequence_length')}, offset={args_model_dict.get('input_offset')}")
-    print(f"   IG steps: {args.n_steps}")
-    if args.specific_seqs:
-        print(f"   Specific sequences: {args.specific_seqs}")
-    else:
-        print(f"   Top-K sequences per emotion: {args.top_k_seqs}")
-    print(f"   Subjects to process: {', '.join(args.subjects)}")
-
-    # Load emotion peak sequences
-    peaks_json_path = project_root / f"analysis/4_IGmap/clf_emotion_peak_sequences/{args.run_id}_emotion_peak_sequences_top10.json"
-    print(f"\n📊 Loading emotion peak sequences from:")
-    print(f"   {peaks_json_path}")
-
-    with open(peaks_json_path, 'r') as f:
-        peaks_data = json.load(f)
-
-    # Determine which emotions to process
-    emotions_to_process = args.emotions if args.emotions else emotion_labels
-    print(f"\n🎯 Emotions to process: {', '.join(emotions_to_process)}")
-
-    # Initialize model once
     init_model_and_data(str(ckpt_path), args_model_dict, project_root)
 
     # Use reference affine
@@ -270,6 +272,8 @@ if __name__ == '__main__':
         affine_path = project_root / "igmap/sub-NDARVN715MJ9_task-movieDM_space-MNI152NLin2009cAsym_desc-brain_mask.nii.gz"
 
     # Process each subject
+    emotions_to_process = args.emotions if args.emotions else emotion_labels
+
     for subject in args.subjects:
         # Filter sequences by emotion
         selected_sequences = {}
@@ -277,35 +281,31 @@ if __name__ == '__main__':
         if args.specific_seqs:
             # Use common peak sequences - construct sequence info directly
             # These are the same for all subjects (same movie scenes)
-            print(f"\n✅ Using {len(args.specific_seqs)} common peak sequences for {subject}")
-            # Get any subject's peak data to construct the sequence info
-            any_subject = list(peaks_data['subjects'].keys())[0]
             for emotion in emotions_to_process:
-                if emotion in peaks_data['subjects'][any_subject]:
-                    all_seqs = peaks_data['subjects'][any_subject][emotion]
-                    selected_sequences[emotion] = [
-                        seq for seq in all_seqs if seq['sequence_idx'] in args.specific_seqs
-                    ]
+                selected_sequences[emotion] = [
+                    {'sequence_idx': seq_idx} for seq_idx in args.specific_seqs
+                ]
+            print(f"✅ Using {len(args.specific_seqs)} common peak sequences for {subject}")
         else:
             # Use subject-specific peak sequences from peak data file
-            if subject not in peaks_data['subjects']:
-                print(f"\n❌ No peak data for subject: {subject}")
+            if subject not in peak_data['subjects']:
+                print(f"⚠️ Subject {subject} not in peak sequences, skipping")
                 continue
 
-            # Get selected sequences for this subject
-            subject_peaks = peaks_data['subjects'][subject]
-
-            # Filter by emotions and top-k
             for emotion in emotions_to_process:
-                if emotion in subject_peaks:
-                    selected_sequences[emotion] = subject_peaks[emotion][:args.top_k_seqs]
+                if emotion in peak_data['subjects'][subject]:
+                    selected_sequences[emotion] = peak_data['subjects'][subject][emotion][:args.top_k_seqs]
 
         if not selected_sequences:
             print(f"⚠️ No sequences for {subject}, skipping")
             continue
 
+        # Process this subject
         process_subject((subject, selected_sequences, args, affine_path, project_root))
 
-    print(f"\n{'='*70}")
-    print("✅ All processing complete!")
-    print(f"{'='*70}")
+    print("\n" + "="*70)
+    print("ALL SUBJECTS COMPLETED!")
+    print("="*70)
+
+if __name__ == '__main__':
+    main()
