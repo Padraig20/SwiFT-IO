@@ -98,6 +98,48 @@ Predictions (per-timepoint or aggregated)
 - Model outputs: `output/moviefmri/`
 - Logs: `logs/`
 
+## SVR Baselines
+
+### Baseline Types
+```
+src/baselines/
+├── svr_with_reduction.py   # Whole brain: pca, roi, time_avg modes
+├── svr_with_glm_mask.py    # GLM sig voxels: glm_pca, glm_direct modes
+└── nonzero_metrics.py      # Non-zero metrics calculator (matches pl_classifier.py)
+```
+
+### GLM Mask SVR (Task-Relevant Voxels)
+```bash
+# GLM sig voxels (~44k) -> PCA -> SVR
+python src/train_svr_with_glm_mask.py \
+    --image_path /scratch/HBN/3.3.1.movieDM_MNI_to_TRs_smooth_znorm_241120 \
+    --reduction_mode glm_pca \
+    --pca_components 100 \
+    --dataset_split_seed 2 \
+    --stratified_params Age Sex \
+    --output_dir output/svr_glm_pca_seq20
+
+# GLM sig voxels -> time-average -> SVR (simpler)
+python src/train_svr_with_glm_mask.py \
+    --reduction_mode glm_direct \
+    --output_dir output/svr_glm_direct_seq20
+```
+
+### GLM Mask Path
+- Union mask: `/scratch/connectome/kimbo/GLM-Baseline-Test/results/full_analysis/smooth_motion/threshold_nonparam/sig_masks_for_ridge/union_mask.nii.gz`
+- Shape: (81, 95, 81) - matches fMRI data exactly
+- 44,303 significant voxels (~7.5% of brain)
+
+### Non-Zero Metrics
+Calculated exactly as in `pl_classifier.py`:
+- `nonzero_mae`, `nonzero_mse`, `nonzero_rmse`, `nonzero_pearson`
+- `detection_tpr`, `detection_f1`, `detection_auroc`
+- Uses original scale with epsilon=1e-6
+
+### Documentation
+- Implementation guide: `docs/baselines/svr_glm_mask_implementation.md`
+- SLURM scripts: `sample_scripts/svr_baselines/`
+
 ## Slash Commands
 
 - `/check-jobs`: Check running SLURM jobs and recent logs
