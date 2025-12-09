@@ -35,6 +35,13 @@ except ImportError:
     WANDB_AVAILABLE = False
     print("Warning: wandb not available. Logging will be disabled.")
 
+try:
+    from .nonzero_metrics import NonZeroMetricsCalculator
+    NONZERO_METRICS_AVAILABLE = True
+except ImportError:
+    NONZERO_METRICS_AVAILABLE = False
+    print("Warning: NonZeroMetricsCalculator not available.")
+
 
 class SVRWithReduction:
     """
@@ -924,6 +931,75 @@ class SVRWithReduction:
                 })
 
         return metrics
+
+    def evaluate_with_nonzero_metrics(self, dataloader, scaler=None, mode: str = 'test') -> Dict[str, float]:
+        """
+        Evaluate with full non-zero metrics matching pl_classifier.py
+
+        Args:
+            dataloader: PyTorch dataloader
+            scaler: StandardScaler from data_module (for inverse transform)
+            mode: 'valid' or 'test'
+
+        Returns:
+            Dictionary with all metrics including non-zero metrics
+        """
+        if not self.fitted:
+            raise RuntimeError("Model must be fitted before evaluation")
+
+        if not NONZERO_METRICS_AVAILABLE:
+            print("Warning: NonZeroMetricsCalculator not available. Using basic evaluate().")
+            return self.evaluate(dataloader, mode)
+
+        print(f"\n{'='*80}")
+        print(f"Evaluating on {mode} set with Non-Zero Metrics")
+        print("="*80)
+
+        # Initialize metrics calculator
+        metrics_calculator = NonZeroMetricsCalculator(
+            scaler=scaler,
+            label_scaling_method='standardization'
+        )
+
+        # Prepare data
+        X_eval, Y_eval = self.prepare_data_from_dataloader(dataloader, mode=mode)
+
+        # Convert to float32
+        if X_eval.dtype == np.float64:
+            X_eval = X_eval.astype(np.float32)
+        if Y_eval.dtype == np.float64:
+            Y_eval = Y_eval.astype(np.float32)
+
+        # Predict for each emotion
+        Y_pred = np.zeros_like(Y_eval)
+
+        for e in range(self.num_emotions):
+            if self.standardize:
+                X_scaled = self.scalers[e].transform(X_eval)
+            else:
+                X_scaled = X_eval
+            Y_pred[:, e] = self.models[e].predict(X_scaled)
+
+        # Calculate metrics for each emotion
+        all_metrics = {}
+
+        for e in range(self.num_emotions):
+            emotion_metrics = metrics_calculator.calculate_metrics(
+                y_true_scaled=Y_eval[:, e],
+                y_pred_scaled=Y_pred[:, e],
+                emotion_idx=e,
+                mode_str=mode
+            )
+            all_metrics.update(emotion_metrics)
+
+        # Add summary metrics
+        summary = metrics_calculator.calculate_summary_metrics(all_metrics, mode)
+        all_metrics.update(summary)
+
+        # Print summary table
+        metrics_calculator.print_summary(all_metrics, mode)
+
+        return all_metrics
 
     def save(self, save_path: str):
         """Save SVR models, scalers, and reduction components"""
